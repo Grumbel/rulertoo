@@ -74,7 +74,7 @@ struct App {
   int win_w = 0, win_h = 0;
 
   // Interaction
-  enum class DragMode { Idle, Move, ResizeRight, Origin, RotateHint };
+  enum class DragMode { Idle, Move, ResizeRight, Origin, RotateHint, UnitChip };
   DragMode drag = DragMode::Idle;
   int drag_off_x = 0, drag_off_y = 0;       // window-local grab offset (move)
   int drag_root_x = 0, drag_root_y = 0;     // root grab pos (resize / origin)
@@ -475,6 +475,35 @@ std::string format_length(const App& app) {
   return buf;
 }
 
+// Geometry of the free-end length chip (window-local). Returns false if no font.
+bool length_chip_rect(App& app, XFontStruct* font, int* out_x, int* out_y, int* out_w, int* out_h) {
+  if (!font) return false;
+  std::string len_s = format_length(app);
+  int ltw = XTextWidth(font, len_s.c_str(), static_cast<int>(len_s.size()));
+  const int pad = 3;
+  const bool vert = app.opts.vertical;
+  const int long_side = vert ? app.win_h : app.win_w;
+  const int thick = vert ? app.win_w : app.win_h;
+  const int band_h = std::max(14, font->ascent + font->descent + 4);
+  const int band_y0 = (thick - band_h) / 2;
+  int lx, ly;
+  if (vert) {
+    lx = band_y0 + 2;
+    ly = long_side - kHandlePx - kRotateBtn - 18;
+  } else {
+    lx = long_side - kHandlePx - kRotateBtn - ltw - 10;
+    ly = band_y0 + font->ascent + 1;
+  }
+  if (lx < 2) lx = 2;
+  if (ly < font->ascent + 2) ly = font->ascent + 2;
+  *out_x = lx - pad;
+  *out_y = ly - font->ascent - pad;
+  *out_w = ltw + 2 * pad;
+  *out_h = font->ascent + font->descent + 2 * pad;
+  return true;
+}
+
+
 void draw_ruler(App& app) {
   if (!app.current_monitor) return;
   fill_bg(app);
@@ -726,6 +755,20 @@ App::DragMode hit_test(App& app, int x, int y) {
   if (x >= rbx && x < rbx + kRotateBtn && y >= rby && y < rby + kRotateBtn)
     return App::DragMode::RotateHint;
 
+  // Length chip toggles units on click
+  XFontStruct* font = XLoadQueryFont(app.dpy, "fixed");
+  if (!font) font = XLoadQueryFont(app.dpy, "6x13");
+  if (font) {
+    int cx, cy, cw, ch;
+    if (length_chip_rect(app, font, &cx, &cy, &cw, &ch)) {
+      if (x >= cx && x < cx + cw && y >= cy && y < cy + ch) {
+        XFreeFont(app.dpy, font);
+        return App::DragMode::UnitChip;
+      }
+    }
+    XFreeFont(app.dpy, font);
+  }
+
   return App::DragMode::Move;
 }
 
@@ -753,6 +796,10 @@ void handle_event(App& app, XEvent& ev) {
         App::DragMode mode = hit_test(app, bx, by);
         if (mode == App::DragMode::RotateHint) {
           toggle_orient(app);
+          break;
+        }
+        if (mode == App::DragMode::UnitChip) {
+          cycle_unit(app);
           break;
         }
         app.drag = mode;
