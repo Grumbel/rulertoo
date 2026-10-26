@@ -24,7 +24,7 @@
             libxrandr
             libxrender
             libxcb
-            xorg.xorgproto
+            xorgproto
           ];
 
           cmakeFlags = [
@@ -54,7 +54,7 @@
             libxrandr
             libxrender
             libxcb
-            xorg.xorgproto
+            xorgproto
           ];
         };
       });
