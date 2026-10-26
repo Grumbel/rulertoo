@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-(pending — persist config)
+`7ba4e4d` — Persist position/orientation/unit via XDG config
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
