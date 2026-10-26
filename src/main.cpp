@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
+#include <map>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -25,32 +26,34 @@ constexpr int kDefaultHeightPx = 52;
 constexpr double kDefaultBgAlpha = 0.40;
 constexpr int kHandlePx = 10;          // free-end (right/bottom) resize handle
 constexpr int kRotateBtn = 18;         // size of rotate button area
+constexpr double kCalTargetMm = 300.0; // real-world length used during calibration
 
 enum class Unit { Mm, Cm, Inch, Pixel };
 
 struct MonitorInfo {
   int x = 0, y = 0;
   int width_px = 0, height_px = 0;
-  int width_mm = 0, height_mm = 0;  // physical panel axes (native)
+  int width_mm = 0, height_mm = 0;  // EDID / XRandR panel axes (native)
   int rotation = 0;                  // RR_Rotate_* bitmask from CRTC
   std::string name;
+  // Multiplier on EDID millimetres: true_mm = edid_mm * cal_factor.
+  // Set via Shift-C calibration against a real 30 cm reference.
+  double cal_factor = 1.0;
 
   // Physical millimetres along the *current* screen X / Y axes
-  // (accounts for 90/270° CRTC rotation).
-  int mm_along_x() const {
-    if (rotation & (RR_Rotate_90 | RR_Rotate_270))
-      return height_mm;
-    return width_mm;
+  // (accounts for 90/270° CRTC rotation and calibration).
+  double mm_along_x() const {
+    const int raw = (rotation & (RR_Rotate_90 | RR_Rotate_270)) ? height_mm : width_mm;
+    return std::max(1.0, static_cast<double>(raw) * cal_factor);
   }
-  int mm_along_y() const {
-    if (rotation & (RR_Rotate_90 | RR_Rotate_270))
-      return width_mm;
-    return height_mm;
+  double mm_along_y() const {
+    const int raw = (rotation & (RR_Rotate_90 | RR_Rotate_270)) ? width_mm : height_mm;
+    return std::max(1.0, static_cast<double>(raw) * cal_factor);
   }
 };
 
 struct Options {
-  int length_mm = kDefaultLengthMm;
+  double length_mm = kDefaultLengthMm;  // continuous; avoids px quantisation on resize
   int height_px = kDefaultHeightPx;
   double bg_alpha = kDefaultBgAlpha;
   Unit unit = Unit::Cm;
@@ -86,13 +89,24 @@ struct App {
   int drag_off_x = 0, drag_off_y = 0;       // window-local grab offset (move)
   int drag_root_x = 0, drag_root_y = 0;     // root grab pos (origin drag)
   int drag_origin_root = 0;                 // locked window origin in root space (resize)
-  int drag_start_length = 0;
+  double drag_start_length = 0;
   int drag_start_origin = 0;
   int origin_mm = 0;          // numbering origin shift (mm)
 
   std::vector<MonitorInfo> monitors;
   const MonitorInfo* current_monitor = nullptr;
   std::string current_monitor_name;
+
+  // Per-output calibration factors (true_mm = edid_mm * factor), keyed by
+  // XRandR output name. Applied whenever monitors are (re)queried.
+  std::map<std::string, double> cal_factors;
+
+  // Shift-C calibration mode: user resizes the window to match a real 30 cm
+  // object, then Enter stores the factor for the current monitor.
+  bool calibrating = false;
+  double cal_saved_length_mm = 0;
+  double cal_saved_factor = 1.0;
+  std::string cal_monitor_name;
 
   Atom atom_wm_delete = 0;
   Atom atom_net_wm_state = 0;
@@ -171,11 +185,17 @@ void print_usage(const char* prog) {
       "  Right-click handle   Toggle orientation (or R button / key r)\n"
       "  u                  Cycle units (cm -> mm -> in -> px)\n"
       "  r                  Rotate horizontal/vertical\n"
+      "  Shift-C            Calibrate against a real 30 cm reference\n"
       "  Esc / q            Quit\n"
       "\n"
-      "Position, orientation, unit, length, thickness and alpha are saved to\n"
-      "$XDG_CONFIG_HOME/rulertoo/config (or ~/.config/rulertoo/config) on exit.\n"
-      "Command-line options override the saved values for that run.\n"
+      "Position, orientation, unit, length, thickness, alpha and per-monitor\n"
+      "calibration are saved to $XDG_CONFIG_HOME/rulertoo/config\n"
+      "(or ~/.config/rulertoo/config) on exit. Command-line options override\n"
+      "the matching saved values for that run.\n"
+      "\n"
+      "Calibration (Shift-C): resize the ruler until it matches a real 30 cm\n"
+      "object, then press Enter to store the scale for the current monitor\n"
+      "(Esc cancels). Useful when EDID millimetre sizes are wrong.\n"
       "\n",
       prog, kDefaultLengthMm, kDefaultHeightPx, kDefaultBgAlpha);
 }
@@ -194,7 +214,7 @@ Options parse_args(int argc, char** argv) {
     if (!std::strcmp(a, "-h") || !std::strcmp(a, "--help")) {
       o.help = true;
     } else if (!std::strcmp(a, "-l") || !std::strcmp(a, "--length")) {
-      o.length_mm = std::atoi(need("--length"));
+      o.length_mm = std::atof(need("--length"));
       if (o.length_mm < 20) o.length_mm = 20;
       if (o.length_mm > 2000) o.length_mm = 2000;
       o.cli_length = true;
@@ -285,7 +305,9 @@ bool parse_unit_string(const std::string& s, Unit* out) {
 
 // Load saved settings. CLI-set fields are left alone.
 // Returns true if a position was restored into *out_x / *out_y.
-bool load_config(Options* opts, int* out_x, int* out_y) {
+// Calibration entries look like: cal.DP-1=0.982
+bool load_config(Options* opts, int* out_x, int* out_y,
+                 std::map<std::string, double>* cal_out) {
   std::string path = config_file_path();
   if (path.empty()) return false;
   FILE* f = std::fopen(path.c_str(), "r");
@@ -305,8 +327,8 @@ bool load_config(Options* opts, int* out_x, int* out_y) {
       y = std::atoi(val.c_str());
       have_pos = true;
     } else if (key == "length_mm" && !opts->cli_length) {
-      int v = std::atoi(val.c_str());
-      if (v >= 20 && v <= 2000) opts->length_mm = v;
+      double v = std::atof(val.c_str());
+      if (v >= 20.0 && v <= 2000.0) opts->length_mm = v;
     } else if (key == "height_px" && !opts->cli_height) {
       int v = std::atoi(val.c_str());
       if (v >= 28 && v <= 200) opts->height_px = v;
@@ -318,6 +340,11 @@ bool load_config(Options* opts, int* out_x, int* out_y) {
       if (parse_unit_string(val, &u)) opts->unit = u;
     } else if (key == "vertical" && !opts->cli_vertical) {
       opts->vertical = (val == "1" || val == "true" || val == "yes");
+    } else if (cal_out && key.size() > 4 && key.compare(0, 4, "cal.") == 0) {
+      std::string mon = key.substr(4);
+      double fct = std::atof(val.c_str());
+      if (!mon.empty() && fct > 0.05 && fct < 20.0)
+        (*cal_out)[mon] = fct;
     }
   }
   std::fclose(f);
@@ -341,7 +368,7 @@ void save_config(const App& app) {
                "version=1\n"
                "x=%d\n"
                "y=%d\n"
-               "length_mm=%d\n"
+               "length_mm=%.3f\n"
                "height_px=%d\n"
                "alpha=%.3f\n"
                "unit=%s\n"
@@ -349,12 +376,19 @@ void save_config(const App& app) {
                app.win_x, app.win_y,
                app.opts.length_mm, app.opts.height_px, app.opts.bg_alpha,
                unit_name(app.opts.unit), app.opts.vertical ? 1 : 0);
+  // One calibration factor per XRandR output name
+  for (const auto& kv : app.cal_factors) {
+    if (kv.second > 0.05 && kv.second < 20.0 &&
+        std::fabs(kv.second - 1.0) > 1e-6)
+      std::fprintf(f, "cal.%s=%.6f\n", kv.first.c_str(), kv.second);
+  }
   std::fclose(f);
   if (std::rename(tmp.c_str(), path.c_str()) != 0)
     std::remove(tmp.c_str());
 }
 
-std::vector<MonitorInfo> query_monitors(Display* dpy, Window root) {
+std::vector<MonitorInfo> query_monitors(Display* dpy, Window root,
+                                        const std::map<std::string, double>& cal) {
   std::vector<MonitorInfo> out;
   XRRScreenResources* res = XRRGetScreenResourcesCurrent(dpy, root);
   if (!res) return out;
@@ -379,6 +413,8 @@ std::vector<MonitorInfo> query_monitors(Display* dpy, Window root) {
     m.height_mm = oi->mm_height > 0 ? static_cast<int>(oi->mm_height) : 0;
     m.rotation = static_cast<int>(ci->rotation);
     m.name = oi->name ? oi->name : "unknown";
+    auto it = cal.find(m.name);
+    if (it != cal.end()) m.cal_factor = it->second;
     if (m.width_mm > 0 && m.height_mm > 0 && m.width_px > 0)
       out.push_back(m);
     XRRFreeCrtcInfo(ci);
@@ -394,6 +430,8 @@ std::vector<MonitorInfo> query_monitors(Display* dpy, Window root) {
     m.width_mm = DisplayWidthMM(dpy, DefaultScreen(dpy));
     m.height_mm = DisplayHeightMM(dpy, DefaultScreen(dpy));
     m.name = "fallback";
+    auto it = cal.find(m.name);
+    if (it != cal.end()) m.cal_factor = it->second;
     out.push_back(m);
   }
   return out;
@@ -419,40 +457,38 @@ const MonitorInfo* find_monitor_for_point(const std::vector<MonitorInfo>& mons,
   return best;
 }
 
-// Axis length in pixels / mm for the ruler's long direction.
-void axis_metrics(const MonitorInfo& m, bool vertical, int* out_px, int* out_mm) {
+// Axis length in pixels / calibrated mm for the ruler's long direction.
+void axis_metrics(const MonitorInfo& m, bool vertical, double* out_px, double* out_mm) {
   if (vertical) {
-    *out_px = m.height_px;
+    *out_px = static_cast<double>(m.height_px);
     *out_mm = m.mm_along_y();
   } else {
-    *out_px = m.width_px;
+    *out_px = static_cast<double>(m.width_px);
     *out_mm = m.mm_along_x();
   }
-  if (*out_px <= 0) *out_px = 1;
-  if (*out_mm <= 0) *out_mm = 1;  // avoid div0; falls back to ~1px/mm nonsense better than crash
+  if (*out_px < 1.0) *out_px = 1.0;
+  if (*out_mm < 1.0) *out_mm = 1.0;
 }
 
 double px_per_mm(const MonitorInfo& m, bool vertical) {
-  int px = 0, mm = 0;
+  double px = 0, mm = 0;
   axis_metrics(m, vertical, &px, &mm);
-  return static_cast<double>(px) / static_cast<double>(mm);
+  return px / mm;
 }
 
-// Exact rounded pixel offset for an integer mm mark: (mm * px + mm_axis/2) / mm_axis
-// avoids float and keeps 0 → 0, length → consistent with window size.
-int mm_to_px(const MonitorInfo& m, bool vertical, int mm) {
-  int px = 0, axis_mm = 0;
+// Pixel offset for a millimetre mark (continuous length supported).
+int mm_to_px(const MonitorInfo& m, bool vertical, double mm) {
+  double px = 0, axis_mm = 0;
   axis_metrics(m, vertical, &px, &axis_mm);
-  if (mm <= 0) return 0;
-  // round half away from zero for positive mm
-  return static_cast<int>((static_cast<long long>(mm) * px + axis_mm / 2) / axis_mm);
+  if (mm <= 0.0) return 0;
+  return static_cast<int>(std::lround(mm * px / axis_mm));
 }
 
-// Window length in pixels so mark at length_mm falls on the last pixel index.
-int length_to_win_px(const MonitorInfo& m, bool vertical, int length_mm) {
+// Window length in pixels so the mark at length_mm falls on the last pixel index.
+int length_to_win_px(const MonitorInfo& m, bool vertical, double length_mm) {
   int p = mm_to_px(m, vertical, length_mm);
   // Include the pixel of the final tick (indices 0..p inclusive → width p+1)
-  return p + 1;
+  return std::max(p + 1, 60);
 }
 
 
@@ -513,7 +549,7 @@ void place_on_pointer(App& app) {
     root_x = 100;
     root_y = 100;
   }
-  app.monitors = query_monitors(app.dpy, app.root);
+  app.monitors = query_monitors(app.dpy, app.root, app.cal_factors);
   const MonitorInfo* m = find_monitor_for_point(app.monitors, root_x, root_y);
   if (m) {
     app.current_monitor = m;
@@ -561,7 +597,7 @@ void create_window(App& app) {
                    PointerMotionMask | StructureNotifyMask | KeyPressMask;
   unsigned long valuemask = CWColormap | CWBorderPixel | CWBackPixel | CWEventMask;
 
-  app.monitors = query_monitors(app.dpy, app.root);
+  app.monitors = query_monitors(app.dpy, app.root, app.cal_factors);
   app.current_monitor = app.monitors.empty() ? nullptr : &app.monitors[0];
   if (app.current_monitor)
     app.current_monitor_name = app.current_monitor->name;
@@ -624,7 +660,7 @@ bool refresh_monitor(App& app, bool force) {
   last_cx = cx;
   last_cy = cy;
 
-  app.monitors = query_monitors(app.dpy, app.root);
+  app.monitors = query_monitors(app.dpy, app.root, app.cal_factors);
   const MonitorInfo* m = find_monitor_for_point(app.monitors, cx, cy);
   if (!m) return false;
 
@@ -709,12 +745,12 @@ int major_step_mm(App& app) {
 
 
 std::string format_length(const App& app) {
-  const int mm = app.opts.length_mm;
+  const double mm = app.opts.length_mm;
   const char* u = unit_name(app.opts.unit);
   char buf[48];
   switch (app.opts.unit) {
     case Unit::Mm:
-      std::snprintf(buf, sizeof(buf), "%d %s", mm, u);
+      std::snprintf(buf, sizeof(buf), "%.0f %s", mm, u);
       break;
     case Unit::Cm:
       std::snprintf(buf, sizeof(buf), "%.1f %s", mm / 10.0, u);
@@ -812,10 +848,11 @@ void draw_ruler(App& app) {
 
   if (font) XSetFont(app.dpy, app.gc, font->fid);
 
-  for (int mm = 0; mm <= app.opts.length_mm; ++mm) {
+  const int length_mm_i = static_cast<int>(std::lround(app.opts.length_mm));
+  for (int mm = 0; mm <= length_mm_i; ++mm) {
     int pos = mm_to_px(*app.current_monitor, vert, mm);
     // Final tick sits on the last pixel of the content edge.
-    if (mm == app.opts.length_mm)
+    if (mm == length_mm_i)
       pos = long_side - 1;
     if (pos < 0 || pos >= long_side) continue;
 
@@ -1004,6 +1041,39 @@ void draw_ruler(App& app) {
     XDrawString(app.dpy, app.win, app.gc, lx, ly, lbuf, llen);
   }
 
+  // Calibration mode banner — high-contrast so it cannot be missed.
+  if (app.calibrating && font) {
+    const char* line1 = "CALIBRATION";
+    const char* line2 = "Resize to real 30 cm";
+    const char* line3 = "Enter=save  Esc=cancel";
+    int pad = 4;
+    int lh = font->ascent + font->descent + 2;
+    int box_h = 3 * lh + 2 * pad;
+    int w1 = XTextWidth(font, line1, static_cast<int>(std::strlen(line1)));
+    int w2 = XTextWidth(font, line2, static_cast<int>(std::strlen(line2)));
+    int w3 = XTextWidth(font, line3, static_cast<int>(std::strlen(line3)));
+    int box_w = std::max(std::max(w1, w2), w3) + 2 * pad;
+    int bx = std::max(2, (app.win_w - box_w) / 2);
+    int by = std::max(2, (app.win_h - box_h) / 2);
+    if (app.has_argb && app.pict_format) {
+      XRenderColor bg = {};
+      bg.red = 0xc000; bg.green = 0x2000; bg.blue = 0x1000; bg.alpha = 0xffff;
+      Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &bg, bx, by, box_w, box_h);
+      XRenderFreePicture(app.dpy, pict);
+    } else {
+      XSetForeground(app.dpy, app.gc, opaque_pixel(app, 192, 32, 16));
+      XFillRectangle(app.dpy, app.win, app.gc, bx, by, box_w, box_h);
+    }
+    XSetForeground(app.dpy, app.gc, color_white(app));
+    XDrawString(app.dpy, app.win, app.gc, bx + pad, by + pad + font->ascent, line1,
+                static_cast<int>(std::strlen(line1)));
+    XDrawString(app.dpy, app.win, app.gc, bx + pad, by + pad + lh + font->ascent, line2,
+                static_cast<int>(std::strlen(line2)));
+    XDrawString(app.dpy, app.win, app.gc, bx + pad, by + pad + 2 * lh + font->ascent, line3,
+                static_cast<int>(std::strlen(line3)));
+  }
+
   // Border
   opaque_line(app, 0, 0, app.win_w - 1, 0);
   opaque_line(app, 0, app.win_h - 1, app.win_w - 1, app.win_h - 1);
@@ -1036,7 +1106,89 @@ void toggle_orient(App& app) {
   draw_ruler(app);
 }
 
+void begin_calibration(App& app) {
+  if (!app.current_monitor) return;
+  if (app.calibrating) return;
+  app.calibrating = true;
+  app.cal_saved_length_mm = app.opts.length_mm;
+  app.cal_saved_factor = app.current_monitor->cal_factor;
+  app.cal_monitor_name = app.current_monitor->name;
+  // Start near the target length so the user only fine-tunes.
+  app.opts.length_mm = kCalTargetMm;
+  apply_geometry(app);
+  draw_ruler(app);
+}
+
+void cancel_calibration(App& app) {
+  if (!app.calibrating) return;
+  app.calibrating = false;
+  app.opts.length_mm = app.cal_saved_length_mm;
+  // Restore factor on the live monitor entry if still the same output.
+  if (app.current_monitor && app.current_monitor->name == app.cal_monitor_name) {
+    // Mutate via the vector entry (current_monitor points into monitors).
+    for (auto& m : app.monitors) {
+      if (m.name == app.cal_monitor_name) {
+        m.cal_factor = app.cal_saved_factor;
+        app.current_monitor = &m;
+        break;
+      }
+    }
+  }
+  apply_geometry(app);
+  draw_ruler(app);
+}
+
+void confirm_calibration(App& app) {
+  if (!app.calibrating || !app.current_monitor) return;
+  // Pixel span currently on screen corresponds to a true kCalTargetMm.
+  // EDID-based length for the same span (with cal_factor=1) is:
+  //   edid_mm = last_tick * edid_axis_mm / axis_px
+  // cal_factor = true_mm / edid_mm.
+  const bool vert = app.opts.vertical;
+  const int span_px = vert ? app.win_h : app.win_w;
+  int last_tick = span_px - 1;
+  if (last_tick < 1) last_tick = 1;
+
+  // Raw EDID millimetres (ignore current factor).
+  const MonitorInfo& m = *app.current_monitor;
+  const int raw_mm = vert
+      ? ((m.rotation & (RR_Rotate_90 | RR_Rotate_270)) ? m.width_mm : m.height_mm)
+      : ((m.rotation & (RR_Rotate_90 | RR_Rotate_270)) ? m.height_mm : m.width_mm);
+  const int raw_px = vert ? m.height_px : m.width_px;
+  if (raw_mm <= 0 || raw_px <= 0) {
+    cancel_calibration(app);
+    return;
+  }
+  const double edid_mm = static_cast<double>(last_tick) * static_cast<double>(raw_mm)
+                         / static_cast<double>(raw_px);
+  if (edid_mm < 1.0) {
+    cancel_calibration(app);
+    return;
+  }
+  double factor = kCalTargetMm / edid_mm;
+  if (factor < 0.05) factor = 0.05;
+  if (factor > 20.0) factor = 20.0;
+
+  app.cal_factors[app.cal_monitor_name] = factor;
+  for (auto& mon : app.monitors) {
+    if (mon.name == app.cal_monitor_name) {
+      mon.cal_factor = factor;
+      app.current_monitor = &mon;
+      break;
+    }
+  }
+  app.calibrating = false;
+  // Keep the window size; length now correctly reports kCalTargetMm.
+  app.opts.length_mm = kCalTargetMm;
+  apply_geometry(app);
+  draw_ruler(app);
+  // Persist immediately so a crash does not lose the calibration.
+  save_config(app);
+}
+
 void quit(App& app) {
+  if (app.calibrating)
+    cancel_calibration(app);
   save_config(app);
   XUnmapWindow(app.dpy, app.win);
   XDestroyWindow(app.dpy, app.win);
@@ -1194,20 +1346,18 @@ void handle_event(App& app, XEvent& ev) {
           int pointer = app.opts.vertical ? my : mx;
           int span_px = pointer - app.drag_origin_root;
           if (span_px < 60) span_px = 60;
-          // Window width is last_tick_px + 1, so invert length_to_win_px.
-          int ax_px = 0, ax_mm = 0;
+          // Continuous length: window span maps 1:1 to pixels (no mm quantisation).
+          double ax_px = 0, ax_mm = 0;
           axis_metrics(*app.current_monitor, app.opts.vertical, &ax_px, &ax_mm);
           int last_tick = span_px - 1;
           if (last_tick < 1) last_tick = 1;
-          int new_len = static_cast<int>((static_cast<long long>(last_tick) * ax_mm + ax_px / 2) / ax_px);
-          if (new_len < 30) new_len = 30;
-          if (new_len > 2000) new_len = 2000;
-          if (new_len != app.opts.length_mm) {
-            app.opts.length_mm = new_len;
-            // Keep win_x/win_y at the values from press; apply_geometry pins them.
-            apply_geometry(app);
-            draw_ruler(app);
-          }
+          double new_len = static_cast<double>(last_tick) * ax_mm / ax_px;
+          if (new_len < 30.0) new_len = 30.0;
+          if (new_len > 2000.0) new_len = 2000.0;
+          // Always apply so 1px pointer moves produce 1px window changes.
+          app.opts.length_mm = new_len;
+          apply_geometry(app);
+          draw_ruler(app);
         } else if (app.drag == App::DragMode::Origin) {
           if (!app.current_monitor) break;
           double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
@@ -1223,12 +1373,23 @@ void handle_event(App& app, XEvent& ev) {
 
     case KeyPress: {
       KeySym ks = XLookupKeysym(&ev.xkey, 0);
+      const unsigned st = ev.xkey.state;
+      if (app.calibrating) {
+        if (ks == XK_Escape)
+          cancel_calibration(app);
+        else if (ks == XK_Return || ks == XK_KP_Enter)
+          confirm_calibration(app);
+        // Ignore other keys while calibrating (q must not quit mid-cal).
+        break;
+      }
       if (ks == XK_Escape || ks == XK_q)
         quit(app);
       else if (ks == XK_u || ks == XK_U)
         cycle_unit(app);
       else if (ks == XK_r || ks == XK_R)
         toggle_orient(app);
+      else if ((st & ShiftMask) && (ks == XK_c || ks == XK_C))
+        begin_calibration(app);
       break;
     }
 
@@ -1253,7 +1414,7 @@ int main(int argc, char** argv) {
   }
 
   int saved_x = 0, saved_y = 0;
-  bool have_saved_pos = load_config(&app.opts, &saved_x, &saved_y);
+  bool have_saved_pos = load_config(&app.opts, &saved_x, &saved_y, &app.cal_factors);
   if (have_saved_pos) {
     app.win_x = saved_x;
     app.win_y = saved_y;
@@ -1269,7 +1430,7 @@ int main(int argc, char** argv) {
   create_window(app);
   if (have_saved_pos) {
     // Restore monitor for the saved position, then size + move.
-    app.monitors = query_monitors(app.dpy, app.root);
+    app.monitors = query_monitors(app.dpy, app.root, app.cal_factors);
     const MonitorInfo* m =
         find_monitor_for_point(app.monitors, app.win_x + 8, app.win_y + 8);
     if (m) {
