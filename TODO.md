@@ -1,15 +1,14 @@
 # TODO — rulertoo
 
 ## Current tip
-`cdc3e85` — Lock resize origin; pin NW gravity
+`8dfd73a` — High-contrast free-end resize grip
 
-Bundle: `/home/workdir/artifacts/rulertoo-013.1-resize-origin-lock-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-014.1-grip-contrast-018568f.bundle`
 
 ## Done
-- [x] XRandR sizing + rotation-aware mm
-- [x] Dual marks, free-end controls, unit click
-- [x] Opaque ARGB text; start on pointer monitor
-- [x] Free-end resize with locked origin (no left-edge jump)
+- [x] Physical XRandR ruler with dual marks, free-end controls
+- [x] Opaque ARGB text; pointer-monitor placement
+- [x] Locked-origin resize; amber high-contrast grip
 
 ## Open
 - [ ] Persist position/orientation/unit
