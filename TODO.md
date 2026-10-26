@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`ec0c280` — Desktop integration (.desktop, icon, AppStream)
+`36b1f25` — Desktop integration (.desktop, icon, AppStream)
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -18,4 +18,4 @@
 
 ## Notes
 - Base for this work line: `9c013f1`
-- Source / bundles under artifacts
+- Bundle naming uses that base short rev
