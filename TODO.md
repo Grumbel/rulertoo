@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-(pending — gamepkgstd alignment)
+`4550a1e` — gamepkgstd Linux desktop alignment
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
