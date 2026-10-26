@@ -26,14 +26,16 @@
           src = self;
 
           nativeBuildInputs = with pkgs; [ cmake pkg-config ];
-          # libxcb + libXau provide xcb.pc / xau.pc for libX11 Requires.private
+          # libxcb, libxau, libxdmcp provide .pc files for libX11 Requires.private
           buildInputs = with pkgs; [
             libx11
             libxrandr
             libxrender
             libxcb
             libxau
+            libxdmcp
             xorgproto
+            libxext
           ];
 
           cmakeFlags = [
@@ -73,6 +75,7 @@
             libxrender
             libxcb
             libxau
+            libxdmcp
             xorgproto
             (writeShellScriptBin "rulertoo-configure" ''
               set -euo pipefail

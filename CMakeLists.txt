@@ -27,10 +27,11 @@ unset(_rulertoo_cli_ack)
 find_package(X11 REQUIRED)
 find_package(PkgConfig REQUIRED)
 
-# libX11/xcb Requires.private pull in xcb and xau — make their .pc files
-# visible so pkg-config does not emit "Package xcb/xau was not found".
+# libX11/xcb Requires.private pull in xcb, xau, xdmcp — make their .pc
+# files visible so pkg-config does not emit "Package … was not found".
 pkg_check_modules(XCB xcb)
 pkg_check_modules(XAU xau)
+pkg_check_modules(XDMCP xdmcp)
 pkg_check_modules(XRANDR REQUIRED xrandr)
 pkg_check_modules(XRENDER REQUIRED xrender)
 
@@ -41,6 +42,7 @@ target_include_directories(rulertoo PRIVATE
   ${XRENDER_INCLUDE_DIRS}
   ${XCB_INCLUDE_DIRS}
   ${XAU_INCLUDE_DIRS}
+  ${XDMCP_INCLUDE_DIRS}
 )
 target_link_libraries(rulertoo PRIVATE
   ${X11_LIBRARIES}
