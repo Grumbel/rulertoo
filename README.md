@@ -27,6 +27,7 @@ from XRandR (not global DPI).
 | Middle-drag | Shift zero / numbering origin |
 | Click **R** button or `r` | Rotate |
 | `u` | Cycle unit |
+| `c` | Cycle colour scheme |
 | `Shift-C` | Calibrate (match real 30 cm, Enter saves) |
 | Right-click / Esc / `q` | Quit |
 

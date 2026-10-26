@@ -34,6 +34,15 @@ constexpr double kCalTargetMm = 300.0; // real-world length used during calibrat
 
 enum class Unit { Mm, Cm, Inch, Pixel };
 
+// Visual themes cycled with `c` (Shift-C remains calibration).
+enum class ColorScheme {
+  Default,       // semi-transparent cool panel (original look)
+  Opaque,        // solid paper, no see-through
+  Inverted,      // dark panel, light marks
+  HighContrast,  // black panel, yellow marks
+  Amber          // warm semi-transparent
+};
+
 struct MonitorInfo {
   int x = 0, y = 0;
   int width_px = 0, height_px = 0;
@@ -61,6 +70,7 @@ struct Options {
   int height_px = kDefaultHeightPx;
   double bg_alpha = kDefaultBgAlpha;
   Unit unit = Unit::Cm;
+  ColorScheme scheme = ColorScheme::Default;
   bool vertical = false;
   bool help = false;
   bool show_version = false;
@@ -70,6 +80,7 @@ struct Options {
   bool cli_alpha = false;
   bool cli_unit = false;
   bool cli_vertical = false;
+  bool cli_scheme = false;
 };
 
 struct App {
@@ -153,11 +164,109 @@ unsigned long opaque_pixel(App& app, unsigned r8, unsigned g8, unsigned b8) {
   return p;
 }
 
-unsigned long color_black(App& app) { return opaque_pixel(app, 0, 0, 0); }
-unsigned long color_white(App& app) { return opaque_pixel(app, 255, 255, 255); }
-unsigned long color_paper(App& app) { return opaque_pixel(app, 255, 248, 232); }
-unsigned long color_chip_bg(App& app) { return opaque_pixel(app, 32, 32, 32); }
+struct Palette {
+  // Background (ARGB panel)
+  unsigned bg_r, bg_g, bg_b;
+  double bg_alpha;          // 1.0 = fully opaque; <1 uses XRender alpha
+  // Tick / border mark colour (opaque)
+  unsigned mark_r, mark_g, mark_b;
+  // Label chip background + text
+  unsigned paper_r, paper_g, paper_b;
+  unsigned text_r, text_g, text_b;
+  // Length readout chip
+  unsigned chip_r, chip_g, chip_b;
+  unsigned chip_text_r, chip_text_g, chip_text_b;
+};
 
+Palette palette_for(ColorScheme s, double user_alpha) {
+  switch (s) {
+    case ColorScheme::Opaque:
+      return Palette{
+        /*bg*/  232, 236, 240, 1.0,
+        /*mark*/ 20, 20, 20,
+        /*paper*/ 255, 248, 232,  /*text*/ 0, 0, 0,
+        /*chip*/ 32, 32, 32,      /*chip_text*/ 255, 255, 255,
+      };
+    case ColorScheme::Inverted:
+      return Palette{
+        /*bg*/  24, 26, 30, std::max(0.55, user_alpha),
+        /*mark*/ 230, 232, 236,
+        /*paper*/ 40, 42, 48,     /*text*/ 240, 240, 240,
+        /*chip*/ 220, 220, 220,   /*chip_text*/ 16, 16, 16,
+      };
+    case ColorScheme::HighContrast:
+      return Palette{
+        /*bg*/  0, 0, 0, 1.0,
+        /*mark*/ 255, 220, 0,
+        /*paper*/ 0, 0, 0,        /*text*/ 255, 220, 0,
+        /*chip*/ 255, 220, 0,     /*chip_text*/ 0, 0, 0,
+      };
+    case ColorScheme::Amber:
+      return Palette{
+        /*bg*/  210, 150, 40, std::max(0.45, user_alpha),
+        /*mark*/ 40, 20, 0,
+        /*paper*/ 255, 236, 180,  /*text*/ 40, 20, 0,
+        /*chip*/ 60, 30, 0,       /*chip_text*/ 255, 236, 180,
+      };
+    case ColorScheme::Default:
+    default:
+      return Palette{
+        /*bg*/  0xd0, 0xd8, 0xe0, user_alpha,
+        /*mark*/ 0, 0, 0,
+        /*paper*/ 255, 248, 232,  /*text*/ 0, 0, 0,
+        /*chip*/ 32, 32, 32,      /*chip_text*/ 255, 255, 255,
+      };
+  }
+}
+
+const char* scheme_name(ColorScheme s) {
+  switch (s) {
+    case ColorScheme::Default: return "default";
+    case ColorScheme::Opaque: return "opaque";
+    case ColorScheme::Inverted: return "inverted";
+    case ColorScheme::HighContrast: return "highcontrast";
+    case ColorScheme::Amber: return "amber";
+  }
+  return "default";
+}
+
+bool parse_scheme_string(const std::string& s, ColorScheme* out) {
+  if (s == "default" || s == "normal") { *out = ColorScheme::Default; return true; }
+  if (s == "opaque" || s == "solid") { *out = ColorScheme::Opaque; return true; }
+  if (s == "inverted" || s == "invert" || s == "dark") { *out = ColorScheme::Inverted; return true; }
+  if (s == "highcontrast" || s == "hc" || s == "high-contrast") {
+    *out = ColorScheme::HighContrast; return true;
+  }
+  if (s == "amber" || s == "warm") { *out = ColorScheme::Amber; return true; }
+  return false;
+}
+
+Palette current_palette(const App& app) {
+  return palette_for(app.opts.scheme, app.opts.bg_alpha);
+}
+
+unsigned long color_mark(App& app) {
+  Palette p = current_palette(app);
+  return opaque_pixel(app, p.mark_r, p.mark_g, p.mark_b);
+}
+unsigned long color_paper(App& app) {
+  Palette p = current_palette(app);
+  return opaque_pixel(app, p.paper_r, p.paper_g, p.paper_b);
+}
+unsigned long color_text(App& app) {
+  Palette p = current_palette(app);
+  return opaque_pixel(app, p.text_r, p.text_g, p.text_b);
+}
+unsigned long color_chip_bg(App& app) {
+  Palette p = current_palette(app);
+  return opaque_pixel(app, p.chip_r, p.chip_g, p.chip_b);
+}
+unsigned long color_chip_text(App& app) {
+  Palette p = current_palette(app);
+  return opaque_pixel(app, p.chip_text_r, p.chip_text_g, p.chip_text_b);
+}
+unsigned long color_white(App& app) { return opaque_pixel(app, 255, 255, 255); }
+unsigned long color_black(App& app) { return opaque_pixel(app, 0, 0, 0); }
 
 const char* unit_name(Unit u) {
   switch (u) {
@@ -190,6 +299,7 @@ void print_usage(const char* prog) {
       "  Middle-drag        Shift numbering origin\n"
       "  Right-click handle   Toggle orientation (or R button / key r)\n"
       "  u                  Cycle units (cm -> mm -> in -> px)\n"
+      "  c                  Cycle colour scheme (default/opaque/inverted/hc/amber)\n"
       "  r                  Rotate horizontal/vertical\n"
       "  Shift-C            Calibrate against a real 30 cm reference\n"
       "  Esc / q            Quit\n"
@@ -348,6 +458,9 @@ bool load_config(Options* opts, int* out_x, int* out_y,
       if (parse_unit_string(val, &u)) opts->unit = u;
     } else if (key == "vertical" && !opts->cli_vertical) {
       opts->vertical = (val == "1" || val == "true" || val == "yes");
+    } else if ((key == "color" || key == "scheme") && !opts->cli_scheme) {
+      ColorScheme s;
+      if (parse_scheme_string(val, &s)) opts->scheme = s;
     } else if (cal_out && key.size() > 4 && key.compare(0, 4, "cal.") == 0) {
       std::string mon = key.substr(4);
       double fct = std::atof(val.c_str());
@@ -380,10 +493,12 @@ void save_config(const App& app) {
                "height_px=%d\n"
                "alpha=%.3f\n"
                "unit=%s\n"
-               "vertical=%d\n",
+               "vertical=%d\n"
+               "color=%s\n",
                app.win_x, app.win_y,
                app.opts.length_mm, app.opts.height_px, app.opts.bg_alpha,
-               unit_name(app.opts.unit), app.opts.vertical ? 1 : 0);
+               unit_name(app.opts.unit), app.opts.vertical ? 1 : 0,
+               scheme_name(app.opts.scheme));
   // One calibration factor per XRandR output name
   for (const auto& kv : app.cal_factors) {
     if (kv.second > 0.05 && kv.second < 20.0 &&
@@ -694,42 +809,54 @@ bool refresh_monitor(App& app, bool force) {
 }
 
 void fill_bg(App& app) {
+  Palette pal = current_palette(app);
   if (app.has_argb && app.pict_format) {
     XRenderColor color = {};
-    unsigned short a = static_cast<unsigned short>(app.opts.bg_alpha * 0xffff);
+    const double a01 = std::clamp(pal.bg_alpha, 0.0, 1.0);
+    unsigned short a = static_cast<unsigned short>(a01 * 0xffff);
     color.alpha = a;
-    color.red   = static_cast<unsigned short>(0xd0 * app.opts.bg_alpha * 0xff);
-    color.green = static_cast<unsigned short>(0xd8 * app.opts.bg_alpha * 0xff);
-    color.blue  = static_cast<unsigned short>(0xe0 * app.opts.bg_alpha * 0xff);
+    // Premultiply for PictOpSrc with partial alpha
+    color.red   = static_cast<unsigned short>(pal.bg_r * a01 * 0xff);
+    color.green = static_cast<unsigned short>(pal.bg_g * a01 * 0xff);
+    color.blue  = static_cast<unsigned short>(pal.bg_b * a01 * 0xff);
     Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
     XRenderFillRectangle(app.dpy, PictOpSrc, pict, &color, 0, 0, app.win_w, app.win_h);
     XRenderFreePicture(app.dpy, pict);
   } else {
-    XSetForeground(app.dpy, app.gc, 0xc8d0d8);
+    XSetForeground(app.dpy, app.gc, opaque_pixel(app, pal.bg_r, pal.bg_g, pal.bg_b));
     XFillRectangle(app.dpy, app.win, app.gc, 0, 0, app.win_w, app.win_h);
   }
 }
 
-void opaque_rect(App& app, int x, int y, int w, int h) {
+void mark_rect(App& app, int x, int y, int w, int h) {
   if (w <= 0 || h <= 0) return;
+  Palette pal = current_palette(app);
   if (app.has_argb && app.pict_format) {
-    XRenderColor black = {0, 0, 0, 0xffff};
+    XRenderColor c = {};
+    c.red = static_cast<unsigned short>(pal.mark_r * 0x101);
+    c.green = static_cast<unsigned short>(pal.mark_g * 0x101);
+    c.blue = static_cast<unsigned short>(pal.mark_b * 0x101);
+    c.alpha = 0xffff;
     Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
-    XRenderFillRectangle(app.dpy, PictOpSrc, pict, &black, x, y, w, h);
+    XRenderFillRectangle(app.dpy, PictOpSrc, pict, &c, x, y, w, h);
     XRenderFreePicture(app.dpy, pict);
   } else {
-    XSetForeground(app.dpy, app.gc, color_black(app));
+    XSetForeground(app.dpy, app.gc, color_mark(app));
     XFillRectangle(app.dpy, app.win, app.gc, x, y, w, h);
   }
 }
 
+void opaque_rect(App& app, int x, int y, int w, int h) {
+  mark_rect(app, x, y, w, h);
+}
+
 void opaque_line(App& app, int x1, int y1, int x2, int y2) {
   if (x1 == x2)
-    opaque_rect(app, x1, std::min(y1, y2), 1, std::abs(y2 - y1) + 1);
+    mark_rect(app, x1, std::min(y1, y2), 1, std::abs(y2 - y1) + 1);
   else if (y1 == y2)
-    opaque_rect(app, std::min(x1, x2), y1, std::abs(x2 - x1) + 1, 1);
+    mark_rect(app, std::min(x1, x2), y1, std::abs(x2 - x1) + 1, 1);
   else {
-    XSetForeground(app.dpy, app.gc, color_black(app));
+    XSetForeground(app.dpy, app.gc, color_mark(app));
     XDrawLine(app.dpy, app.win, app.gc, x1, y1, x2, y2);
   }
 }
@@ -841,8 +968,12 @@ void draw_ruler(App& app) {
   if (vert) {
     // vertical: band along X in the middle of thickness
     if (app.has_argb && app.pict_format) {
+      Palette pal = current_palette(app);
       XRenderColor band = {};
-      band.red = 0xffff; band.green = 0xfaf0; band.blue = 0xe8e0; band.alpha = 0xffff;
+      band.red = static_cast<unsigned short>(pal.paper_r * 0x101);
+      band.green = static_cast<unsigned short>(pal.paper_g * 0x101);
+      band.blue = static_cast<unsigned short>(pal.paper_b * 0x101);
+      band.alpha = 0xffff;
       Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
       XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, band_y0, 0, band_h, long_side);
       XRenderFreePicture(app.dpy, pict);
@@ -852,8 +983,12 @@ void draw_ruler(App& app) {
     }
   } else {
     if (app.has_argb && app.pict_format) {
+      Palette pal = current_palette(app);
       XRenderColor band = {};
-      band.red = 0xffff; band.green = 0xfaf0; band.blue = 0xe8e0; band.alpha = 0xffff;
+      band.red = static_cast<unsigned short>(pal.paper_r * 0x101);
+      band.green = static_cast<unsigned short>(pal.paper_g * 0x101);
+      band.blue = static_cast<unsigned short>(pal.paper_b * 0x101);
+      band.alpha = 0xffff;
       Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
       XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, 0, band_y0, long_side, band_h);
       XRenderFreePicture(app.dpy, pict);
@@ -935,9 +1070,12 @@ void draw_ruler(App& app) {
       int cw = tw + 2 * pad;
       int ch = font->ascent + font->descent + 2 * pad;
       if (app.has_argb && app.pict_format) {
+        Palette pal = current_palette(app);
         XRenderColor chip = {};
-        // Opaque near-white paper (16-bit channels, full alpha)
-        chip.red = 0xffff; chip.green = 0xf8f8; chip.blue = 0xe8e8; chip.alpha = 0xffff;
+        chip.red = static_cast<unsigned short>(pal.paper_r * 0x101);
+        chip.green = static_cast<unsigned short>(pal.paper_g * 0x101);
+        chip.blue = static_cast<unsigned short>(pal.paper_b * 0x101);
+        chip.alpha = 0xffff;
         Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
         XRenderFillRectangle(app.dpy, PictOpSrc, pict, &chip, cx, cy, cw, ch);
         XRenderFreePicture(app.dpy, pict);
@@ -945,7 +1083,7 @@ void draw_ruler(App& app) {
         XSetForeground(app.dpy, app.gc, color_paper(app));
         XFillRectangle(app.dpy, app.win, app.gc, cx, cy, cw, ch);
       }
-      XSetForeground(app.dpy, app.gc, color_black(app));
+      XSetForeground(app.dpy, app.gc, color_text(app));
       XDrawString(app.dpy, app.win, app.gc, tx, ty, buf, len);
     }
   }
@@ -1012,9 +1150,25 @@ void draw_ruler(App& app) {
   }
   if (rbx < 2) rbx = 2;
   if (rby < 2) rby = 2;
-  opaque_rect(app, rbx, rby, kRotateBtn, kRotateBtn);
+  // R button: mark fill with contrasting glyph
+  {
+    Palette pal = current_palette(app);
+    if (app.has_argb && app.pict_format) {
+      XRenderColor c = {};
+      c.red = static_cast<unsigned short>(pal.chip_r * 0x101);
+      c.green = static_cast<unsigned short>(pal.chip_g * 0x101);
+      c.blue = static_cast<unsigned short>(pal.chip_b * 0x101);
+      c.alpha = 0xffff;
+      Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &c, rbx, rby, kRotateBtn, kRotateBtn);
+      XRenderFreePicture(app.dpy, pict);
+    } else {
+      XSetForeground(app.dpy, app.gc, color_chip_bg(app));
+      XFillRectangle(app.dpy, app.win, app.gc, rbx, rby, kRotateBtn, kRotateBtn);
+    }
+  }
   if (font) {
-    XSetForeground(app.dpy, app.gc, color_white(app));
+    XSetForeground(app.dpy, app.gc, color_chip_text(app));
     XDrawString(app.dpy, app.win, app.gc, rbx + 5, rby + 13, "R", 1);
   }
 
@@ -1040,20 +1194,24 @@ void draw_ruler(App& app) {
     if (lx < 2) lx = 2;
     if (ly < font->ascent + 2) ly = font->ascent + 2;
     if (app.has_argb && app.pict_format) {
+      Palette pal = current_palette(app);
       XRenderColor chip = {};
-      chip.red = 0x2020; chip.green = 0x2020; chip.blue = 0x2020; chip.alpha = 0xffff;
+      chip.red = static_cast<unsigned short>(pal.chip_r * 0x101);
+      chip.green = static_cast<unsigned short>(pal.chip_g * 0x101);
+      chip.blue = static_cast<unsigned short>(pal.chip_b * 0x101);
+      chip.alpha = 0xffff;
       Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
       XRenderFillRectangle(app.dpy, PictOpSrc, pict, &chip,
                            lx - pad, ly - font->ascent - pad,
                            ltw + 2 * pad, font->ascent + font->descent + 2 * pad);
       XRenderFreePicture(app.dpy, pict);
-      XSetForeground(app.dpy, app.gc, color_white(app));
+      XSetForeground(app.dpy, app.gc, color_chip_text(app));
     } else {
       XSetForeground(app.dpy, app.gc, color_chip_bg(app));
       XFillRectangle(app.dpy, app.win, app.gc,
                      lx - pad, ly - font->ascent - pad,
                      ltw + 2 * pad, font->ascent + font->descent + 2 * pad);
-      XSetForeground(app.dpy, app.gc, color_white(app));
+      XSetForeground(app.dpy, app.gc, color_chip_text(app));
     }
     XDrawString(app.dpy, app.win, app.gc, lx, ly, lbuf, llen);
   }
@@ -1107,6 +1265,17 @@ void cycle_unit(App& app) {
     case Unit::Mm: app.opts.unit = Unit::Inch; break;
     case Unit::Inch: app.opts.unit = Unit::Pixel; break;
     case Unit::Pixel: app.opts.unit = Unit::Cm; break;
+  }
+  draw_ruler(app);
+}
+
+void cycle_scheme(App& app) {
+  switch (app.opts.scheme) {
+    case ColorScheme::Default:      app.opts.scheme = ColorScheme::Opaque; break;
+    case ColorScheme::Opaque:       app.opts.scheme = ColorScheme::Inverted; break;
+    case ColorScheme::Inverted:     app.opts.scheme = ColorScheme::HighContrast; break;
+    case ColorScheme::HighContrast: app.opts.scheme = ColorScheme::Amber; break;
+    case ColorScheme::Amber:        app.opts.scheme = ColorScheme::Default; break;
   }
   draw_ruler(app);
 }
@@ -1405,8 +1574,10 @@ void handle_event(App& app, XEvent& ev) {
         cycle_unit(app);
       else if (ks == XK_r || ks == XK_R)
         toggle_orient(app);
-      else if ((st & ShiftMask) && (ks == XK_c || ks == XK_C))
+      else if ((ks == XK_c || ks == XK_C) && (st & ShiftMask))
         begin_calibration(app);
+      else if (ks == XK_c || ks == XK_C)
+        cycle_scheme(app);
       break;
     }
 
