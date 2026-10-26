@@ -13,7 +13,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <errno.h>
 #include <string>
+#include <sys/stat.h>
 #include <vector>
 
 namespace {
@@ -54,6 +56,12 @@ struct Options {
   Unit unit = Unit::Cm;
   bool vertical = false;
   bool help = false;
+  // CLI overrides config when set
+  bool cli_length = false;
+  bool cli_height = false;
+  bool cli_alpha = false;
+  bool cli_unit = false;
+  bool cli_vertical = false;
 };
 
 struct App {
@@ -164,6 +172,10 @@ void print_usage(const char* prog) {
       "  u                  Cycle units (cm -> mm -> in -> px)\n"
       "  r                  Rotate horizontal/vertical\n"
       "  Esc / q            Quit\n"
+      "\n"
+      "Position, orientation, unit, length, thickness and alpha are saved to\n"
+      "$XDG_CONFIG_HOME/rulertoo/config (or ~/.config/rulertoo/config) on exit.\n"
+      "Command-line options override the saved values for that run.\n"
       "\n",
       prog, kDefaultLengthMm, kDefaultHeightPx, kDefaultBgAlpha);
 }
@@ -185,14 +197,17 @@ Options parse_args(int argc, char** argv) {
       o.length_mm = std::atoi(need("--length"));
       if (o.length_mm < 20) o.length_mm = 20;
       if (o.length_mm > 2000) o.length_mm = 2000;
+      o.cli_length = true;
     } else if (!std::strcmp(a, "-H") || !std::strcmp(a, "--height")) {
       o.height_px = std::atoi(need("--height"));
       if (o.height_px < 28) o.height_px = 28;
       if (o.height_px > 200) o.height_px = 200;
+      o.cli_height = true;
     } else if (!std::strcmp(a, "-a") || !std::strcmp(a, "--alpha")) {
       o.bg_alpha = std::atof(need("--alpha"));
       if (o.bg_alpha < 0.0) o.bg_alpha = 0.0;
       if (o.bg_alpha > 1.0) o.bg_alpha = 1.0;
+      o.cli_alpha = true;
     } else if (!std::strcmp(a, "-u") || !std::strcmp(a, "--unit")) {
       const char* u = need("--unit");
       if (!std::strcmp(u, "cm")) o.unit = Unit::Cm;
@@ -203,8 +218,10 @@ Options parse_args(int argc, char** argv) {
         std::fprintf(stderr, "rulertoo: unknown unit '%s'\n", u);
         std::exit(2);
       }
+      o.cli_unit = true;
     } else if (!std::strcmp(a, "-v") || !std::strcmp(a, "--vertical")) {
       o.vertical = true;
+      o.cli_vertical = true;
     } else {
       std::fprintf(stderr, "rulertoo: unknown option: %s\n", a);
       print_usage(argv[0]);
@@ -212,6 +229,129 @@ Options parse_args(int argc, char** argv) {
     }
   }
   return o;
+}
+
+// --- Persistent config ($XDG_CONFIG_HOME/rulertoo/config) -----------------
+
+std::string config_dir() {
+  if (const char* xdg = std::getenv("XDG_CONFIG_HOME"); xdg && xdg[0])
+    return std::string(xdg) + "/rulertoo";
+  if (const char* home = std::getenv("HOME"); home && home[0])
+    return std::string(home) + "/.config/rulertoo";
+  return {};
+}
+
+std::string config_file_path() {
+  std::string dir = config_dir();
+  if (dir.empty()) return {};
+  return dir + "/config";
+}
+
+bool ensure_config_dir() {
+  std::string dir = config_dir();
+  if (dir.empty()) return false;
+  if (mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST)
+    return false;
+  return true;
+}
+
+// Parse a single "key=value" line; returns false if not a usable pair.
+bool split_kv(const char* line, std::string* key, std::string* value) {
+  while (*line == ' ' || *line == '\t') ++line;
+  if (*line == '\0' || *line == '#' || *line == '\n') return false;
+  const char* eq = std::strchr(line, '=');
+  if (!eq) return false;
+  std::string k(line, eq - line);
+  while (!k.empty() && (k.back() == ' ' || k.back() == '\t')) k.pop_back();
+  const char* v = eq + 1;
+  while (*v == ' ' || *v == '\t') ++v;
+  std::string val(v);
+  while (!val.empty() && (val.back() == '\n' || val.back() == '\r' ||
+                          val.back() == ' ' || val.back() == '\t'))
+    val.pop_back();
+  if (k.empty()) return false;
+  *key = k;
+  *value = val;
+  return true;
+}
+
+bool parse_unit_string(const std::string& s, Unit* out) {
+  if (s == "cm") { *out = Unit::Cm; return true; }
+  if (s == "mm") { *out = Unit::Mm; return true; }
+  if (s == "in" || s == "inch") { *out = Unit::Inch; return true; }
+  if (s == "px" || s == "pixel") { *out = Unit::Pixel; return true; }
+  return false;
+}
+
+// Load saved settings. CLI-set fields are left alone.
+// Returns true if a position was restored into *out_x / *out_y.
+bool load_config(Options* opts, int* out_x, int* out_y) {
+  std::string path = config_file_path();
+  if (path.empty()) return false;
+  FILE* f = std::fopen(path.c_str(), "r");
+  if (!f) return false;
+
+  bool have_pos = false;
+  int x = 0, y = 0;
+  char buf[512];
+  while (std::fgets(buf, sizeof(buf), f)) {
+    std::string key, val;
+    if (!split_kv(buf, &key, &val)) continue;
+
+    if (key == "x") {
+      x = std::atoi(val.c_str());
+      have_pos = true;
+    } else if (key == "y") {
+      y = std::atoi(val.c_str());
+      have_pos = true;
+    } else if (key == "length_mm" && !opts->cli_length) {
+      int v = std::atoi(val.c_str());
+      if (v >= 20 && v <= 2000) opts->length_mm = v;
+    } else if (key == "height_px" && !opts->cli_height) {
+      int v = std::atoi(val.c_str());
+      if (v >= 28 && v <= 200) opts->height_px = v;
+    } else if (key == "alpha" && !opts->cli_alpha) {
+      double v = std::atof(val.c_str());
+      if (v >= 0.0 && v <= 1.0) opts->bg_alpha = v;
+    } else if (key == "unit" && !opts->cli_unit) {
+      Unit u;
+      if (parse_unit_string(val, &u)) opts->unit = u;
+    } else if (key == "vertical" && !opts->cli_vertical) {
+      opts->vertical = (val == "1" || val == "true" || val == "yes");
+    }
+  }
+  std::fclose(f);
+  if (have_pos) {
+    *out_x = x;
+    *out_y = y;
+  }
+  return have_pos;
+}
+
+void save_config(const App& app) {
+  if (!ensure_config_dir()) return;
+  std::string path = config_file_path();
+  if (path.empty()) return;
+  // Write via temp + rename so a crash mid-write does not truncate the file.
+  std::string tmp = path + ".tmp";
+  FILE* f = std::fopen(tmp.c_str(), "w");
+  if (!f) return;
+  std::fprintf(f,
+               "# rulertoo config — rewritten on exit\n"
+               "version=1\n"
+               "x=%d\n"
+               "y=%d\n"
+               "length_mm=%d\n"
+               "height_px=%d\n"
+               "alpha=%.3f\n"
+               "unit=%s\n"
+               "vertical=%d\n",
+               app.win_x, app.win_y,
+               app.opts.length_mm, app.opts.height_px, app.opts.bg_alpha,
+               unit_name(app.opts.unit), app.opts.vertical ? 1 : 0);
+  std::fclose(f);
+  if (std::rename(tmp.c_str(), path.c_str()) != 0)
+    std::remove(tmp.c_str());
 }
 
 std::vector<MonitorInfo> query_monitors(Display* dpy, Window root) {
@@ -897,6 +1037,7 @@ void toggle_orient(App& app) {
 }
 
 void quit(App& app) {
+  save_config(app);
   XUnmapWindow(app.dpy, app.win);
   XDestroyWindow(app.dpy, app.win);
   XCloseDisplay(app.dpy);
@@ -1111,6 +1252,13 @@ int main(int argc, char** argv) {
     return 0;
   }
 
+  int saved_x = 0, saved_y = 0;
+  bool have_saved_pos = load_config(&app.opts, &saved_x, &saved_y);
+  if (have_saved_pos) {
+    app.win_x = saved_x;
+    app.win_y = saved_y;
+  }
+
   app.dpy = XOpenDisplay(nullptr);
   if (!app.dpy) die("cannot open X display");
 
@@ -1119,7 +1267,20 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "rulertoo: XRandR not available, using fallback sizes\n");
 
   create_window(app);
-  place_on_pointer(app);
+  if (have_saved_pos) {
+    // Restore monitor for the saved position, then size + move.
+    app.monitors = query_monitors(app.dpy, app.root);
+    const MonitorInfo* m =
+        find_monitor_for_point(app.monitors, app.win_x + 8, app.win_y + 8);
+    if (m) {
+      app.current_monitor = m;
+      app.current_monitor_name = m->name;
+    }
+    apply_geometry(app);
+    XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
+  } else {
+    place_on_pointer(app);
+  }
   draw_ruler(app);
 
   XEvent ev;
