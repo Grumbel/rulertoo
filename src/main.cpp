@@ -280,19 +280,42 @@ const MonitorInfo* find_monitor_for_point(const std::vector<MonitorInfo>& mons,
   return best;
 }
 
-double px_per_mm(const MonitorInfo& m, bool vertical) {
-  // CRTC width/height are already in the current orientation (and reflect
-  // xrandr --scale when the server reports the scaled mode size).
-  // Physical mm must follow the same axis after rotation.
+// Axis length in pixels / mm for the ruler's long direction.
+void axis_metrics(const MonitorInfo& m, bool vertical, int* out_px, int* out_mm) {
   if (vertical) {
-    int mm = m.mm_along_y();
-    if (mm <= 0 || m.height_px <= 0) return 96.0 / 25.4;
-    return static_cast<double>(m.height_px) / static_cast<double>(mm);
+    *out_px = m.height_px;
+    *out_mm = m.mm_along_y();
+  } else {
+    *out_px = m.width_px;
+    *out_mm = m.mm_along_x();
   }
-  int mm = m.mm_along_x();
-  if (mm <= 0 || m.width_px <= 0) return 96.0 / 25.4;
-  return static_cast<double>(m.width_px) / static_cast<double>(mm);
+  if (*out_px <= 0) *out_px = 1;
+  if (*out_mm <= 0) *out_mm = 1;  // avoid div0; falls back to ~1px/mm nonsense better than crash
 }
+
+double px_per_mm(const MonitorInfo& m, bool vertical) {
+  int px = 0, mm = 0;
+  axis_metrics(m, vertical, &px, &mm);
+  return static_cast<double>(px) / static_cast<double>(mm);
+}
+
+// Exact rounded pixel offset for an integer mm mark: (mm * px + mm_axis/2) / mm_axis
+// avoids float and keeps 0 → 0, length → consistent with window size.
+int mm_to_px(const MonitorInfo& m, bool vertical, int mm) {
+  int px = 0, axis_mm = 0;
+  axis_metrics(m, vertical, &px, &axis_mm);
+  if (mm <= 0) return 0;
+  // round half away from zero for positive mm
+  return static_cast<int>((static_cast<long long>(mm) * px + axis_mm / 2) / axis_mm);
+}
+
+// Window length in pixels so mark at length_mm falls on the last pixel index.
+int length_to_win_px(const MonitorInfo& m, bool vertical, int length_mm) {
+  int p = mm_to_px(m, vertical, length_mm);
+  // Include the pixel of the final tick (indices 0..p inclusive → width p+1)
+  return p + 1;
+}
+
 
 void set_borderless(App& app) {
   struct {
@@ -315,8 +338,7 @@ void set_borderless(App& app) {
 
 void apply_geometry(App& app) {
   if (!app.current_monitor) return;
-  double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
-  int long_px = static_cast<int>(std::lround(app.opts.length_mm * ppm));
+  int long_px = length_to_win_px(*app.current_monitor, app.opts.vertical, app.opts.length_mm);
   if (long_px < 60) long_px = 60;
 
   int new_w, new_h;
@@ -405,10 +427,9 @@ void create_window(App& app) {
   if (app.current_monitor)
     app.current_monitor_name = app.current_monitor->name;
 
-  double ppm = app.current_monitor
-                   ? px_per_mm(*app.current_monitor, app.opts.vertical)
-                   : (96.0 / 25.4);
-  int long_px = static_cast<int>(std::lround(app.opts.length_mm * ppm));
+  int long_px = 60;
+  if (app.current_monitor)
+    long_px = length_to_win_px(*app.current_monitor, app.opts.vertical, app.opts.length_mm);
   if (long_px < 60) long_px = 60;
   if (app.opts.vertical) {
     app.win_w = app.opts.height_px;
@@ -605,7 +626,6 @@ void draw_ruler(App& app) {
   if (!app.current_monitor) return;
   fill_bg(app);
 
-  double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
   const bool vert = app.opts.vertical;
   const int long_side = vert ? app.win_h : app.win_w;
   const int thick = vert ? app.win_w : app.win_h;
@@ -653,7 +673,10 @@ void draw_ruler(App& app) {
   if (font) XSetFont(app.dpy, app.gc, font->fid);
 
   for (int mm = 0; mm <= app.opts.length_mm; ++mm) {
-    int pos = static_cast<int>(std::lround(mm * ppm));
+    int pos = mm_to_px(*app.current_monitor, vert, mm);
+    // Final tick sits on the last pixel of the content edge.
+    if (mm == app.opts.length_mm)
+      pos = long_side - 1;
     if (pos < 0 || pos >= long_side) continue;
 
     int h = short_h;
@@ -679,6 +702,11 @@ void draw_ruler(App& app) {
     if (mm % step == 0 && font) {
       int rel = mm - app.origin_mm;
       double val = label_value(app, rel);
+      // Avoid signed zero in labels ("-0", "-0.0").
+      if (val > -0.0001 && val < 0.0001)
+        val = 0.0;
+      if (rel == 0)
+        val = 0.0;
       char buf[24];
       if (app.opts.unit == Unit::Inch)
         std::snprintf(buf, sizeof(buf), "%.1f", val);
@@ -688,6 +716,8 @@ void draw_ruler(App& app) {
         std::snprintf(buf, sizeof(buf), "%.0f", val);
       else
         std::snprintf(buf, sizeof(buf), "%d", rel);
+      if (!std::strcmp(buf, "-0") || !std::strcmp(buf, "-0.0"))
+        std::snprintf(buf, sizeof(buf), "0");
 
       int len = static_cast<int>(std::strlen(buf));
       int tw = XTextWidth(font, buf, len);
@@ -1022,11 +1052,15 @@ void handle_event(App& app, XEvent& ev) {
           if (!app.current_monitor) break;
           // Length from locked origin → pointer (root space). Origin is fixed
           // for the gesture so the left/top edge cannot jump to 0.
-          double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
           int pointer = app.opts.vertical ? my : mx;
-          int long_px = pointer - app.drag_origin_root;
-          if (long_px < 60) long_px = 60;
-          int new_len = static_cast<int>(std::lround(long_px / ppm));
+          int span_px = pointer - app.drag_origin_root;
+          if (span_px < 60) span_px = 60;
+          // Window width is last_tick_px + 1, so invert length_to_win_px.
+          int ax_px = 0, ax_mm = 0;
+          axis_metrics(*app.current_monitor, app.opts.vertical, &ax_px, &ax_mm);
+          int last_tick = span_px - 1;
+          if (last_tick < 1) last_tick = 1;
+          int new_len = static_cast<int>((static_cast<long long>(last_tick) * ax_mm + ax_px / 2) / ax_px);
           if (new_len < 30) new_len = 30;
           if (new_len > 2000) new_len = 2000;
           if (new_len != app.opts.length_mm) {
