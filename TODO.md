@@ -1,15 +1,15 @@
 # TODO — rulertoo
 
 ## Current tip
-`99e758a` — Opaque ARGB text; place on pointer monitor
+`cdc3e85` — Lock resize origin; pin NW gravity
 
-Bundle: `/home/workdir/artifacts/rulertoo-012.1-argb-text-pointer-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-013.1-resize-origin-lock-018568f.bundle`
 
 ## Done
 - [x] XRandR sizing + rotation-aware mm
-- [x] Dual marks, free-end controls, unit click, stable resize
-- [x] Opaque text on ARGB (not BlackPixel)
-- [x] Start on monitor under the pointer
+- [x] Dual marks, free-end controls, unit click
+- [x] Opaque ARGB text; start on pointer monitor
+- [x] Free-end resize with locked origin (no left-edge jump)
 
 ## Open
 - [ ] Persist position/orientation/unit
