@@ -33,7 +33,7 @@
 
           meta = with pkgs.lib; {
             description = "Borderless X11 ruler with real physical mm/cm via XRandR";
-            homepage = "https://github.com/";
+            homepage = "https://github.com/Grumbel/rulertoo";
             license = licenses.gpl3Plus;
             platforms = platforms.linux;
             mainProgram = "rulertoo";

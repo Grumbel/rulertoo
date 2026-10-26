@@ -35,6 +35,10 @@ nix build && ./result/bin/rulertoo
 cmake -B build -G Ninja && cmake --build build && ./build/rulertoo
 ```
 
+Installed packages also ship a `.desktop` entry, scalable icon, and
+AppStream metainfo so the ruler appears in application menus and software
+centres.
+
 ## Licence
 
 GPL-3.0-or-later

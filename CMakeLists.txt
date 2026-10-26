@@ -38,3 +38,14 @@ install(TARGETS rulertoo
 install(FILES README.md LICENSE
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
 )
+
+# Desktop integration
+install(FILES data/org.grumbel.rulertoo.desktop
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+)
+install(FILES data/icons/hicolor/scalable/apps/rulertoo.svg
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+)
+install(FILES data/metainfo/org.grumbel.rulertoo.metainfo.xml
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo
+)
