@@ -1,9 +1,9 @@
 # TODO — rulertoo
 
 ## Current tip
-`87191c4` — Fix DragMode::None / X11 macro clash
+`42d5caf` — Readable labels + CRTC rotation-aware physical scale
 
-Bundle: `/home/workdir/artifacts/rulertoo-004.1-fix-none-macro-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-005.1-contrast-rotation-018568f.bundle`
 
 ## Done
 - [x] XRandR physical sizing, per-monitor
@@ -13,18 +13,20 @@ Bundle: `/home/workdir/artifacts/rulertoo-004.1-fix-none-macro-018568f.bundle`
 - [x] Rotate (button + key + right-click on handle)
 - [x] Middle-drag numbering origin
 - [x] Units: cm / mm / in / px
-- [x] CLI: --length --height --alpha --unit --vertical
-- [x] Flicker reduction (throttled monitor query, coalesced motion)
-- [x] Rename project to rulertoo; fix nixpkgs xorg deprecations
-- [x] Build fix: DragMode::None → Idle (X11 None macro)
+- [x] CLI options
+- [x] Flicker reduction
+- [x] Rename to rulertoo; libx11 package names
+- [x] Build fix: DragMode::None → Idle
+- [x] High-contrast outlined numbers/labels
+- [x] CRTC rotation: map physical mm to screen axes
 
 ## Open
-- [ ] Smoother resize feedback / live length readout
+- [ ] Live length readout while resizing
 - [ ] Persist position/orientation/unit
-- [ ] Better vertical number layout
+- [ ] Full CRTC transform matrix (non-uniform scale / reflect)
 - [ ] XShape-only mode without compositor
 - [ ] Fractional inch marks
 
 ## Notes
-- Base of work line: `018568f` (fixed)
+- Base of work line: `018568f`
 - Source: `/home/workdir/artifacts/rulertoo`
