@@ -726,11 +726,56 @@ void draw_ruler(App& app) {
     }
   }
 
-  // Resize handle on free end (right / bottom)
-  if (vert)
-    opaque_rect(app, 0, long_side - kHandlePx, thick, kHandlePx);
-  else
-    opaque_rect(app, long_side - kHandlePx, 0, kHandlePx, thick);
+  // Resize handle on free end — high-contrast grip (visible on light and dark).
+  {
+    int hx, hy, hw, hh;
+    if (vert) {
+      hx = 0; hy = long_side - kHandlePx; hw = thick; hh = kHandlePx;
+    } else {
+      hx = long_side - kHandlePx; hy = 0; hw = kHandlePx; hh = thick;
+    }
+    // Base fill: amber so it stands out on black and white desktops
+    if (app.has_argb && app.pict_format) {
+      XRenderColor base = {};
+      base.red = 0xe0e0; base.green = 0x9090; base.blue = 0x2020; base.alpha = 0xffff;
+      Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &base, hx, hy, hw, hh);
+      // Light edge
+      XRenderColor hi = {};
+      hi.red = hi.green = hi.blue = 0xffff; hi.alpha = 0xffff;
+      if (vert)
+        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &hi, hx, hy, hw, 1);
+      else
+        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &hi, hx, hy, 1, hh);
+      // Dark edge
+      XRenderColor lo = {};
+      lo.red = lo.green = lo.blue = 0; lo.alpha = 0xffff;
+      if (vert)
+        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &lo, hx, hy + hh - 1, hw, 1);
+      else
+        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &lo, hx + hw - 1, hy, 1, hh);
+      // Grip ridges
+      XRenderColor ridge = {};
+      ridge.red = 0xffff; ridge.green = 0xd0d0; ridge.blue = 0x8080; ridge.alpha = 0xffff;
+      if (vert) {
+        for (int i = 2; i < hh - 1; i += 3)
+          XRenderFillRectangle(app.dpy, PictOpSrc, pict, &ridge, hx + 2, hy + i, hw - 4, 1);
+      } else {
+        for (int i = 2; i < hw - 1; i += 3)
+          XRenderFillRectangle(app.dpy, PictOpSrc, pict, &ridge, hx + i, hy + 2, 1, hh - 4);
+      }
+      XRenderFreePicture(app.dpy, pict);
+    } else {
+      XSetForeground(app.dpy, app.gc, 0xe09020);
+      XFillRectangle(app.dpy, app.win, app.gc, hx, hy, hw, hh);
+      XSetForeground(app.dpy, app.gc, 0xffffff);
+      if (vert) XDrawLine(app.dpy, app.win, app.gc, hx, hy, hx + hw - 1, hy);
+      else XDrawLine(app.dpy, app.win, app.gc, hx, hy, hx, hy + hh - 1);
+      XSetForeground(app.dpy, app.gc, 0x000000);
+      if (vert) XDrawLine(app.dpy, app.win, app.gc, hx, hy + hh - 1, hx + hw - 1, hy + hh - 1);
+      else XDrawLine(app.dpy, app.win, app.gc, hx + hw - 1, hy, hx + hw - 1, hy + hh - 1);
+    }
+  }
 
   // Rotate button at the free end, inset from the resize handle
   int rbx, rby;
