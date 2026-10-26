@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`38e3723` — Silence xau/unused-code/CMake CLI warnings
+`38e3723` — Silence xau/unused-code/CMake CLI warnings; libxau rename
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -19,7 +19,7 @@
 - [x] Blank off-monitor segments (outline only) when spanning outputs
 - [x] Live multi-monitor blanking while moving; override-redirect vs panel
 - [x] Man page: man/rulertoo.1 installed to mandir/man1
-- [x] Silence xau pkg-config noise, unused-function warnings, CMake unused-CLI
+- [x] Silence xau/unused-code/CMake CLI warnings; libxau rename
 
 ## Open
 - [ ] Full CRTC transform matrix
