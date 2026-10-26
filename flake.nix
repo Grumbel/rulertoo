@@ -32,7 +32,7 @@
             libxrandr
             libxrender
             libxcb
-            xorg.libXau
+            libxau
             xorgproto
           ];
 
@@ -72,7 +72,7 @@
             libxrandr
             libxrender
             libxcb
-            xorg.libXau
+            libxau
             xorgproto
             (writeShellScriptBin "rulertoo-configure" ''
               set -euo pipefail
