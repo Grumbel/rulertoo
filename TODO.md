@@ -1,16 +1,15 @@
 # TODO — rulertoo
 
 ## Current tip
-`8461c27` — Resize jump fix + vertical label centering
+`99e758a` — Opaque ARGB text; place on pointer monitor
 
-Bundle: `/home/workdir/artifacts/rulertoo-011.1-resize-jump-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-012.1-argb-text-pointer-018568f.bundle`
 
 ## Done
-- [x] XRandR physical sizing + rotation-aware mm
-- [x] Dual-edge marks, opaque chips, free-end controls/info
-- [x] Click length to cycle units
-- [x] Stable free-end resize (no jump on release)
-- [x] Vertical label centering in band
+- [x] XRandR sizing + rotation-aware mm
+- [x] Dual marks, free-end controls, unit click, stable resize
+- [x] Opaque text on ARGB (not BlackPixel)
+- [x] Start on monitor under the pointer
 
 ## Open
 - [ ] Persist position/orientation/unit
