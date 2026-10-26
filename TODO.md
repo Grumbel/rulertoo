@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`76939eb` — Live blanking on move; override-redirect vs panel
+`c6c0521` — Man page rulertoo(1)
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -17,7 +17,8 @@
 - [x] Colour schemes on `c` (default / opaque / inverted / high-contrast / amber)
 - [x] Clamp position on rotate/place so vertical rulers are not cut off
 - [x] Blank off-monitor segments (outline only) when spanning outputs
-- [x] Live multi-monitor blanking while moving; override-redirect to stop WM/panel fight on resize
+- [x] Live multi-monitor blanking while moving; override-redirect vs panel
+- [x] Man page: man/rulertoo.1 installed to mandir/man1
 
 ## Open
 - [ ] Full CRTC transform matrix
