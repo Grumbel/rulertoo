@@ -1,16 +1,15 @@
 # TODO — rulertoo
 
 ## Current tip
-`cb917f5` — Free-end info; resize scale fix; opaque label chips
+`23ea45f` — Click length chip to cycle units
 
-Bundle: `/home/workdir/artifacts/rulertoo-009.1-free-end-scale-fix-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-010.1-click-units-018568f.bundle`
 
 ## Done
-- [x] XRandR sizing + rotation-aware mm
-- [x] Dual-edge marks + opaque label chips / band
-- [x] Free-end resize + R + length readout (info only at free end)
-- [x] Resize uses root coords (scale no longer drifts)
-- [x] Origin drag; units; CLI; wheel ignored
+- [x] Physical XRandR sizing + rotation-aware mm
+- [x] Dual-edge marks, opaque label chips, free-end controls
+- [x] Resize scale fixed (root deltas)
+- [x] Click length readout to cycle units (also key u)
 
 ## Open
 - [ ] Persist position/orientation/unit
