@@ -634,6 +634,25 @@ void set_borderless(App& app) {
   }
 }
 
+// Keep the window fully visible on the current monitor when possible.
+// If the ruler is longer/taller than the monitor, pin to the top-left margin
+// so the origin edge stays on-screen (free end may still overhang).
+void clamp_position_to_monitor(App& app) {
+  if (!app.current_monitor) return;
+  const MonitorInfo& m = *app.current_monitor;
+  constexpr int margin = 8;
+  int min_x = m.x + margin;
+  int min_y = m.y + margin;
+  int max_x = m.x + m.width_px - app.win_w - margin;
+  int max_y = m.y + m.height_px - app.win_h - margin;
+  if (max_x < min_x) max_x = min_x;
+  if (max_y < min_y) max_y = min_y;
+  if (app.win_x < min_x) app.win_x = min_x;
+  if (app.win_y < min_y) app.win_y = min_y;
+  if (app.win_x > max_x) app.win_x = max_x;
+  if (app.win_y > max_y) app.win_y = max_y;
+}
+
 void apply_geometry(App& app) {
   if (!app.current_monitor) return;
   int long_px = length_to_win_px(*app.current_monitor, app.opts.vertical, app.opts.length_mm);
@@ -679,19 +698,13 @@ void place_on_pointer(App& app) {
     app.current_monitor_name = m->name;
   }
   apply_geometry(app);
-  // Position near the pointer, clamped to the chosen monitor
-  int nx = root_x - app.win_w / 4;
+  // Centre on the pointer along the long axis so vertical mode is not
+  // biased toward the bottom of the screen; then clamp fully on-monitor.
+  int nx = root_x - app.win_w / 2;
   int ny = root_y - app.win_h / 2;
-  if (m) {
-    if (nx < m->x + 8) nx = m->x + 8;
-    if (ny < m->y + 8) ny = m->y + 8;
-    if (nx + app.win_w > m->x + m->width_px - 8)
-      nx = m->x + m->width_px - app.win_w - 8;
-    if (ny + app.win_h > m->y + m->height_px - 8)
-      ny = m->y + m->height_px - app.win_h - 8;
-  }
   app.win_x = nx;
   app.win_y = ny;
+  clamp_position_to_monitor(app);
   XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
 }
 
@@ -1281,13 +1294,15 @@ void cycle_scheme(App& app) {
 }
 
 void toggle_orient(App& app) {
-  // Keep centre roughly stable
+  // Keep centre roughly stable, then pull fully on-screen. Without the
+  // clamp, a long vertical ruler near the bottom of the display is cut off.
   int cx = app.win_x + app.win_w / 2;
   int cy = app.win_y + app.win_h / 2;
   app.opts.vertical = !app.opts.vertical;
   apply_geometry(app);
   app.win_x = cx - app.win_w / 2;
   app.win_y = cy - app.win_h / 2;
+  clamp_position_to_monitor(app);
   XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
   draw_ruler(app);
 }
@@ -1630,6 +1645,7 @@ int main(int argc, char** argv) {
       app.current_monitor_name = m->name;
     }
     apply_geometry(app);
+    clamp_position_to_monitor(app);
     XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
   } else {
     place_on_pointer(app);
