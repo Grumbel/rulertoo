@@ -1,7 +1,9 @@
 # TODO — rulertoo
 
 ## Current tip
-Pending commit (rename + features).
+`ae415b7` — Rename to rulertoo; resize, rotate, units, origin drag
+
+Bundle: `/home/workdir/artifacts/rulertoo-003.1-features-018568f.bundle`
 
 ## Done
 - [x] XRandR physical sizing, per-monitor
@@ -23,5 +25,6 @@ Pending commit (rename + features).
 - [ ] Fractional inch marks
 
 ## Notes
-- Base of work line: 018568f
-- Source: /home/workdir/artifacts/rulertoo
+- Base of work line: `018568f` (fixed)
+- Source: `/home/workdir/artifacts/rulertoo`
+- Apply tip: `git pull .../rulertoo-003.1-features-018568f.bundle HEAD`
