@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`7ba4e4d` — Persist position/orientation/unit via XDG config
+`6e4eb80` — Persist position/orientation/unit via XDG config
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -18,5 +18,4 @@
 
 ## Notes
 - Base for this work line: `9c013f1`
-- Previous tip (desktop): `80914d5`
-- Bundle under artifacts
+- Bundle contains the full stack from that base (desktop + persistence)
