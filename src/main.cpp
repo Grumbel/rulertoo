@@ -77,7 +77,8 @@ struct App {
   enum class DragMode { Idle, Move, ResizeRight, Origin, RotateHint, UnitChip };
   DragMode drag = DragMode::Idle;
   int drag_off_x = 0, drag_off_y = 0;       // window-local grab offset (move)
-  int drag_root_x = 0, drag_root_y = 0;     // root grab pos (resize / origin)
+  int drag_root_x = 0, drag_root_y = 0;     // root grab pos (origin drag)
+  int drag_origin_root = 0;                 // locked window origin in root space (resize)
   int drag_start_length = 0;
   int drag_start_origin = 0;
   int origin_mm = 0;          // numbering origin shift (mm)
@@ -331,7 +332,14 @@ void apply_geometry(App& app) {
     return;
   app.win_w = new_w;
   app.win_h = new_h;
-  XResizeWindow(app.dpy, app.win, app.win_w, app.win_h);
+  // Pin top-left (or top for vertical growth downward) so the origin edge
+  // never jumps when the WM interprets a bare resize.
+  XWindowChanges ch = {};
+  ch.x = app.win_x;
+  ch.y = app.win_y;
+  ch.width = app.win_w;
+  ch.height = app.win_h;
+  XConfigureWindow(app.dpy, app.win, CWX | CWY | CWWidth | CWHeight, &ch);
 }
 
 
@@ -431,6 +439,17 @@ void create_window(App& app) {
   app.gc = XCreateGC(app.dpy, app.win, 0, nullptr);
   if (app.has_argb)
     app.pict_format = XRenderFindVisualFormat(app.dpy, app.visual);
+
+  // Keep origin edge fixed on resize (do not let WM centre-gravity us).
+  XSizeHints* hints = XAllocSizeHints();
+  if (hints) {
+    hints->flags = PWinGravity | PMinSize;
+    hints->win_gravity = NorthWestGravity;
+    hints->min_width = 40;
+    hints->min_height = 28;
+    XSetWMNormalHints(app.dpy, app.win, hints);
+    XFree(hints);
+  }
 
   XMapWindow(app.dpy, app.win);
   XFlush(app.dpy);
@@ -858,13 +877,20 @@ void handle_event(App& app, XEvent& ev) {
       break;
 
     case ConfigureNotify:
-      app.win_x = ev.xconfigure.x;
-      app.win_y = ev.xconfigure.y;
-      // During our own resize we already set win_w/win_h; ignore transient WM sizes.
+      // During free-end resize the origin is locked; ignore WM position/size
+      // feedback so the left/top edge cannot jump.
       if (app.drag == App::DragMode::ResizeRight)
         break;
-      if (ev.xconfigure.width != app.win_w || ev.xconfigure.height != app.win_h)
-        XResizeWindow(app.dpy, app.win, app.win_w, app.win_h);
+      app.win_x = ev.xconfigure.x;
+      app.win_y = ev.xconfigure.y;
+      if (ev.xconfigure.width != app.win_w || ev.xconfigure.height != app.win_h) {
+        XWindowChanges ch = {};
+        ch.x = app.win_x;
+        ch.y = app.win_y;
+        ch.width = app.win_w;
+        ch.height = app.win_h;
+        XConfigureWindow(app.dpy, app.win, CWX | CWY | CWWidth | CWHeight, &ch);
+      }
       break;
 
     case ButtonPress: {
@@ -890,7 +916,10 @@ void handle_event(App& app, XEvent& ev) {
         app.drag_root_x = ev.xbutton.x_root;
         app.drag_root_y = ev.xbutton.y_root;
         app.drag_start_length = app.opts.length_mm;
-        // ResizeRight / Move / Origin handled in MotionNotify
+        // Lock origin edge in root space for the whole resize gesture.
+        // Using live win_x/win_y during drag caused the left edge to jump
+        // (ConfigureNotify feedback / WM gravity).
+        app.drag_origin_root = app.opts.vertical ? app.win_y : app.win_x;
       } else if (ev.xbutton.button == Button2) {
         // Middle: drag origin
         app.drag = App::DragMode::Origin;
@@ -946,18 +975,18 @@ void handle_event(App& app, XEvent& ev) {
             draw_ruler(app);
         } else if (app.drag == App::DragMode::ResizeRight) {
           if (!app.current_monitor) break;
-          // Derive length from origin edge → pointer in root space so the
-          // result is independent of intermediate window sizes.
+          // Length from locked origin → pointer (root space). Origin is fixed
+          // for the gesture so the left/top edge cannot jump to 0.
           double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
-          int origin_root = app.opts.vertical ? app.win_y : app.win_x;
           int pointer = app.opts.vertical ? my : mx;
-          int long_px = pointer - origin_root;
+          int long_px = pointer - app.drag_origin_root;
           if (long_px < 60) long_px = 60;
           int new_len = static_cast<int>(std::lround(long_px / ppm));
           if (new_len < 30) new_len = 30;
           if (new_len > 2000) new_len = 2000;
           if (new_len != app.opts.length_mm) {
             app.opts.length_mm = new_len;
+            // Keep win_x/win_y at the values from press; apply_geometry pins them.
             apply_geometry(app);
             draw_ruler(app);
           }
