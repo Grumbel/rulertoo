@@ -74,9 +74,12 @@ Cycle colour schemes: default → opaque → inverted → highcontrast →
 amber → default.
 .TP
 .B Shift-C
-Enter calibration mode for the current monitor (see
+Start calibration (30 cm target; see
 .B CALIBRATION
-below).
+).
+.TP
+.B Ctrl-C
+While calibrating, cycle the reference length (5/10/20/30 cm, 2/4/8/12 in).
 .TP
 Right-click outside the handle, or
 .BR Esc " / " q
@@ -84,11 +87,17 @@ Quit. Settings are written to the config file on exit.
 .SH CALIBRATION
 When EDID or XRandR millimetre sizes are wrong, press
 .B Shift-C
-to calibrate against a real 30 cm reference:
+to enter calibration mode (starts at a 30 cm target):
 .IP \(bu 2
-A high-contrast banner appears on the ruler.
+A high-contrast banner shows the active target length.
 .IP \(bu 2
-Resize the window until it matches a physical 30 cm object.
+Resize the window until it matches a physical object of that length.
+.IP \(bu 2
+Press
+.B Ctrl-C
+to cycle targets:
+5 cm, 10 cm, 20 cm, 30 cm, then 2 in, 4 in, 8 in, 12 in
+(smaller lengths suit panels that cannot fit 30 cm).
 .IP \(bu 2
 Press
 .B Enter

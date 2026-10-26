@@ -30,7 +30,24 @@ constexpr int kDefaultHeightPx = 52;
 constexpr double kDefaultBgAlpha = 0.40;
 constexpr int kHandlePx = 10;          // free-end (right/bottom) resize handle
 constexpr int kRotateBtn = 18;         // size of rotate button area
-constexpr double kCalTargetMm = 300.0; // real-world length used during calibration
+// Calibration reference lengths (metric then imperial). Ctrl-C cycles while
+// calibrating; Shift-C starts at the 30 cm entry.
+struct CalTarget {
+  double mm;
+  const char* label;  // short banner text, e.g. "30 cm"
+};
+constexpr CalTarget kCalTargets[] = {
+  { 50.0,        "5 cm"  },
+  { 100.0,       "10 cm" },
+  { 200.0,       "20 cm" },
+  { 300.0,       "30 cm" },
+  { 2.0 * 25.4,  "2 in"  },
+  { 4.0 * 25.4,  "4 in"  },
+  { 8.0 * 25.4,  "8 in"  },
+  { 12.0 * 25.4, "12 in" },
+};
+constexpr int kCalTargetCount = static_cast<int>(sizeof(kCalTargets) / sizeof(kCalTargets[0]));
+constexpr int kCalDefaultIndex = 3;  // 30 cm
 
 enum class Unit { Mm, Cm, Inch, Pixel };
 
@@ -120,6 +137,7 @@ struct App {
   // Shift-C calibration mode: user resizes the window to match a real 30 cm
   // object, then Enter stores the factor for the current monitor.
   bool calibrating = false;
+  int cal_target_index = kCalDefaultIndex;
   double cal_saved_length_mm = 0;
   double cal_saved_factor = 1.0;
   std::string cal_monitor_name;
@@ -301,7 +319,7 @@ void print_usage(const char* prog) {
       "  u                  Cycle units (cm -> mm -> in -> px)\n"
       "  c                  Cycle colour scheme (default/opaque/inverted/hc/amber)\n"
       "  r                  Rotate horizontal/vertical\n"
-      "  Shift-C            Calibrate against a real 30 cm reference\n"
+      "  Shift-C            Start calibration (30 cm; Ctrl-C cycles targets)\n"
       "  Esc / q            Quit\n"
       "\n"
       "Position, orientation, unit, length, thickness, alpha and per-monitor\n"
@@ -309,9 +327,10 @@ void print_usage(const char* prog) {
       "(or ~/.config/rulertoo/config) on exit. Command-line options override\n"
       "the matching saved values for that run.\n"
       "\n"
-      "Calibration (Shift-C): resize the ruler until it matches a real 30 cm\n"
-      "object, then press Enter to store the scale for the current monitor\n"
-      "(Esc cancels). Useful when EDID millimetre sizes are wrong.\n"
+      "Calibration (Shift-C): resize until the ruler matches a real reference\n"
+      "length, then Enter to store the scale for the current monitor (Esc\n"
+      "cancels). While calibrating, Ctrl-C cycles targets: 5/10/20/30 cm and\n"
+      "2/4/8/12 in (useful on small panels that cannot fit 30 cm).\n"
       "\n",
       prog, kDefaultLengthMm, kDefaultHeightPx, kDefaultBgAlpha);
 }
@@ -1314,8 +1333,11 @@ void draw_ruler(App& app) {
   // Calibration mode banner — high-contrast so it cannot be missed.
   if (app.calibrating && font) {
     const char* line1 = "CALIBRATION";
-    const char* line2 = "Resize to real 30 cm";
-    const char* line3 = "Enter=save  Esc=cancel";
+    char line2buf[64];
+    const int ti = std::clamp(app.cal_target_index, 0, kCalTargetCount - 1);
+    std::snprintf(line2buf, sizeof(line2buf), "Resize to real %s", kCalTargets[ti].label);
+    const char* line2 = line2buf;
+    const char* line3 = "Enter=save  Esc=cancel  Ctrl-C=next";
     int pad = 4;
     int lh = font->ascent + font->descent + 2;
     int box_h = 3 * lh + 2 * pad;
@@ -1393,11 +1415,20 @@ void begin_calibration(App& app) {
   if (!app.current_monitor) return;
   if (app.calibrating) return;
   app.calibrating = true;
+  app.cal_target_index = kCalDefaultIndex;  // 30 cm first
   app.cal_saved_length_mm = app.opts.length_mm;
   app.cal_saved_factor = app.current_monitor->cal_factor;
   app.cal_monitor_name = app.current_monitor->name;
   // Start near the target length so the user only fine-tunes.
-  app.opts.length_mm = kCalTargetMm;
+  app.opts.length_mm = kCalTargets[app.cal_target_index].mm;
+  apply_geometry(app);
+  draw_ruler(app);
+}
+
+void cycle_cal_target(App& app) {
+  if (!app.calibrating) return;
+  app.cal_target_index = (app.cal_target_index + 1) % kCalTargetCount;
+  app.opts.length_mm = kCalTargets[app.cal_target_index].mm;
   apply_geometry(app);
   draw_ruler(app);
 }
@@ -1423,10 +1454,11 @@ void cancel_calibration(App& app) {
 
 void confirm_calibration(App& app) {
   if (!app.calibrating || !app.current_monitor) return;
-  // Pixel span currently on screen corresponds to a true kCalTargetMm.
+  // Pixel span currently on screen corresponds to the active cal target.
   // EDID-based length for the same span (with cal_factor=1) is:
   //   edid_mm = last_tick * edid_axis_mm / axis_px
   // cal_factor = true_mm / edid_mm.
+  const double target_mm = kCalTargets[std::clamp(app.cal_target_index, 0, kCalTargetCount - 1)].mm;
   const bool vert = app.opts.vertical;
   const int span_px = vert ? app.win_h : app.win_w;
   int last_tick = span_px - 1;
@@ -1448,7 +1480,7 @@ void confirm_calibration(App& app) {
     cancel_calibration(app);
     return;
   }
-  double factor = kCalTargetMm / edid_mm;
+  double factor = target_mm / edid_mm;
   if (factor < 0.05) factor = 0.05;
   if (factor > 20.0) factor = 20.0;
 
@@ -1461,8 +1493,8 @@ void confirm_calibration(App& app) {
     }
   }
   app.calibrating = false;
-  // Keep the window size; length now correctly reports kCalTargetMm.
-  app.opts.length_mm = kCalTargetMm;
+  // Keep the window size; length now correctly reports the target.
+  app.opts.length_mm = target_mm;
   apply_geometry(app);
   draw_ruler(app);
   // Persist immediately so a crash does not lose the calibration.
@@ -1667,6 +1699,8 @@ void handle_event(App& app, XEvent& ev) {
           cancel_calibration(app);
         else if (ks == XK_Return || ks == XK_KP_Enter)
           confirm_calibration(app);
+        else if ((ks == XK_c || ks == XK_C) && (st & ControlMask))
+          cycle_cal_target(app);
         // Ignore other keys while calibrating (q must not quit mid-cal).
         break;
       }
