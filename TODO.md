@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`c28fe3d` — Calibration multi-length targets (Ctrl-C)
+`38e3723` — Silence xau/unused-code/CMake CLI warnings
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -11,7 +11,7 @@
 - [x] Desktop integration: .desktop, scalable SVG icon, AppStream metainfo, CMake install
 - [x] Persist position/orientation/unit/length/height/alpha via XDG config
 - [x] Smooth free-end resize (continuous length_mm, 1 px steps)
-- [x] Per-monitor calibration (Shift-C, XDG config cal.<output>=factor)
+- [x] Per-monitor calibration (Shift-C; Ctrl-C cycles 5–30 cm / 2–12 in)
 - [x] flake: xorgproto (drop deprecated xorg.xorgproto)
 - [x] gamepkgstd (Linux desktop): VERSION, --version, WM_CLASS, develop helpers
 - [x] Colour schemes on `c` (default / opaque / inverted / high-contrast / amber)
@@ -19,7 +19,7 @@
 - [x] Blank off-monitor segments (outline only) when spanning outputs
 - [x] Live multi-monitor blanking while moving; override-redirect vs panel
 - [x] Man page: man/rulertoo.1 installed to mandir/man1
-- [x] Calibration targets: Ctrl-C cycles 5/10/20/30 cm and 2/4/8/12 in
+- [x] Silence xau pkg-config noise, unused-function warnings, CMake unused-CLI
 
 ## Open
 - [ ] Full CRTC transform matrix
