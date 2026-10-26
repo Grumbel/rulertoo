@@ -1,23 +1,22 @@
 # TODO — rulertoo
 
 ## Current tip
-`8133ef9` — Drop left resize handle; free-end only
+`a1f0df0` — Dual-side marks, opaque number band, R at free end
 
-Bundle: `/home/workdir/artifacts/rulertoo-006.1-single-resize-handle-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-007.1-dual-marks-band-018568f.bundle`
 
 ## Done
-- [x] XRandR physical sizing + CRTC rotation-aware mm axes
-- [x] Classic marks; high-contrast outlined numbers
-- [x] ARGB bg, opaque marks
-- [x] Move, free-end resize, rotate, origin drag, units
-- [x] CLI options; flicker reduction; rename; None-macro fix
-- [x] Single resize handle (right/bottom only)
+- [x] XRandR physical sizing + rotation-aware mm
+- [x] Dual-edge marks + opaque centre number band
+- [x] Free-end resize only; R button at free end
+- [x] Origin drag; units; CLI; flicker reduction
+- [x] Scroll-wheel ignored; cm labels fixed when origin off-grid
 
 ## Open
 - [ ] Live length readout while resizing
 - [ ] Persist position/orientation/unit
-- [ ] Full CRTC transform matrix (non-uniform scale / reflect)
-- [ ] XShape-only mode without compositor
+- [ ] Full CRTC transform matrix
+- [ ] XShape-only mode
 - [ ] Fractional inch marks
 
 ## Notes
