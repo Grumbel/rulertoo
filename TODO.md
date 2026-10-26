@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`f4ed1f9` — Clamp vertical ruler on-monitor
+`6eac5a7` — Blank off-monitor ruler segments
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -16,6 +16,7 @@
 - [x] gamepkgstd (Linux desktop): VERSION, --version, WM_CLASS, develop helpers
 - [x] Colour schemes on `c` (default / opaque / inverted / high-contrast / amber)
 - [x] Clamp position on rotate/place so vertical rulers are not cut off
+- [x] Blank off-monitor segments (outline only) when spanning outputs
 
 ## Open
 - [ ] Full CRTC transform matrix
