@@ -15,7 +15,8 @@ from XRandR (not global DPI).
 - Units: cm, mm, inch, pixel (cycle with `u`)
 - Semi-transparent background; marks drawn fully opaque
 - CLI options for length, height, alpha, unit, orientation
-- Remembers position, orientation, unit, length, thickness and alpha across runs
+- Remembers position, orientation, unit, length, thickness, alpha and per-monitor calibration
+- Shift-C calibration against a real 30 cm reference when EDID sizes are wrong
 
 ## Controls
 
@@ -26,6 +27,7 @@ from XRandR (not global DPI).
 | Middle-drag | Shift zero / numbering origin |
 | Click **R** button or `r` | Rotate |
 | `u` | Cycle unit |
+| `Shift-C` | Calibrate (match real 30 cm, Enter saves) |
 | Right-click / Esc / `q` | Quit |
 
 ## Build
