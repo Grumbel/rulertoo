@@ -1,7 +1,9 @@
 # TODO — rulertoo
 
 ## Current tip
-`36b1f25` — Desktop integration (.desktop, icon, AppStream)
+`070ee60` — Desktop integration (.desktop, icon, AppStream)
+
+Bundle: `/home/workdir/artifacts/rulertoo-017.1-desktop-integration-9c013f1.bundle`
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -18,4 +20,4 @@
 
 ## Notes
 - Base for this work line: `9c013f1`
-- Bundle naming uses that base short rev
+- Bundle contains commits from base to tip (full stack for this sequence)
