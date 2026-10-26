@@ -1,6 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.16)
-project(rulertoo VERSION 0.2.1 LANGUAGES CXX)
+
+# Source of truth: top-level VERSION (e.g. "0.2.1" or "0.3.0-dev"), or
+# -DPROJECT_VERSION_FULL=... from packaging (Nix may append .<revCount>+g<rev>).
+if(NOT DEFINED PROJECT_VERSION_FULL)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" PROJECT_VERSION_FULL)
+  string(STRIP "${PROJECT_VERSION_FULL}" PROJECT_VERSION_FULL)
+endif()
+# project() needs a numeric version; strip -dev / +git / similar suffixes.
+string(REGEX REPLACE "^([0-9]+\\.[0-9]+\\.[0-9]+).*" "\\1" PROJECT_VERSION_NUMERIC "${PROJECT_VERSION_FULL}")
+
+project(rulertoo VERSION ${PROJECT_VERSION_NUMERIC} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,6 +41,9 @@ target_link_libraries(rulertoo PRIVATE
   ${XRENDER_LIBRARIES}
 )
 target_compile_options(rulertoo PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(rulertoo PRIVATE
+  RULERTOO_VERSION="${PROJECT_VERSION_FULL}"
+)
 
 install(TARGETS rulertoo
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
