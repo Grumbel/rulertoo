@@ -1,9 +1,9 @@
 # TODO — rulertoo
 
 ## Current tip
-`ae415b7` — Rename to rulertoo; resize, rotate, units, origin drag
+`87191c4` — Fix DragMode::None / X11 macro clash
 
-Bundle: `/home/workdir/artifacts/rulertoo-003.1-features-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-004.1-fix-none-macro-018568f.bundle`
 
 ## Done
 - [x] XRandR physical sizing, per-monitor
@@ -16,6 +16,7 @@ Bundle: `/home/workdir/artifacts/rulertoo-003.1-features-018568f.bundle`
 - [x] CLI: --length --height --alpha --unit --vertical
 - [x] Flicker reduction (throttled monitor query, coalesced motion)
 - [x] Rename project to rulertoo; fix nixpkgs xorg deprecations
+- [x] Build fix: DragMode::None → Idle (X11 None macro)
 
 ## Open
 - [ ] Smoother resize feedback / live length readout
@@ -27,4 +28,3 @@ Bundle: `/home/workdir/artifacts/rulertoo-003.1-features-018568f.bundle`
 ## Notes
 - Base of work line: `018568f` (fixed)
 - Source: `/home/workdir/artifacts/rulertoo`
-- Apply tip: `git pull .../rulertoo-003.1-features-018568f.bundle HEAD`
