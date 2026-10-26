@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 {
-  description = "X11 on-screen ruler with real physical dimensions via XRandR";
+  description = "On-screen X11 ruler with real physical dimensions via XRandR";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -13,31 +13,31 @@
         pkgs = nixpkgs.legacyPackages.${system};
       in {
         packages.default = pkgs.stdenv.mkDerivation {
-          pname = "x11-ruler";
-          version = "0.1.0";
+          pname = "rulertoo";
+          version = "0.2.0";
           src = self;
 
           nativeBuildInputs = with pkgs; [ cmake pkg-config ];
           buildInputs = with pkgs; [
-            xorg.libX11
-            xorg.libXrandr
-            xorg.libXext
-            xorg.libXrender
+            libx11
+            libxrandr
+            libxext
+            libxrender
           ];
 
           cmakeFlags = [ "-DCMAKE_BUILD_TYPE=Release" ];
 
           meta = with pkgs.lib; {
-            description = "Borderless X11 ruler showing real physical mm/cm via XRandR";
+            description = "Borderless X11 ruler with real physical mm/cm via XRandR";
             license = licenses.gpl3Plus;
             platforms = platforms.linux;
-            mainProgram = "x11-ruler";
+            mainProgram = "rulertoo";
           };
         };
 
         apps.default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/x11-ruler";
+          program = "${self.packages.${system}.default}/bin/rulertoo";
         };
 
         devShells.default = pkgs.mkShell {
@@ -45,14 +45,10 @@
             cmake
             pkg-config
             ninja
-            xorg.libX11
-            xorg.libXrandr
-            xorg.libXext
-            xorg.libXrender
-            xorg.libX11.dev
-            xorg.libXrandr.dev
-            xorg.libXext.dev
-            xorg.libXrender.dev
+            libx11
+            libxrandr
+            libxext
+            libxrender
           ];
         };
       });

@@ -1,31 +1,27 @@
-# TODO — x11-ruler
+# TODO — rulertoo
 
 ## Current tip
-`018568f` — Initial x11-ruler implementation
-
-Bundle: `/home/workdir/artifacts/x11-ruler-001.1-initial-018568f.bundle`
+Pending commit (rename + features).
 
 ## Done
-- [x] Basic X11 window, borderless, draggable
-- [x] XRandR monitor detection + physical mm size
-- [x] Auto pixel size from physical length (default 30 cm)
-- [x] Classic ruler marks: mm short, 5 mm medium, cm long + numbers
-- [x] ARGB transparency when available (half-transparent bg + opaque marks)
-- [x] CMakeLists.txt + flake.nix
-- [x] REUSE / SPDX / GPLv3
+- [x] XRandR physical sizing, per-monitor
+- [x] Classic ruler marks + numbers
+- [x] ARGB bg, opaque marks via XRender
+- [x] Drag to move; edge handles to resize
+- [x] Rotate (button + key + right-click on handle)
+- [x] Middle-drag numbering origin
+- [x] Units: cm / mm / in / px
+- [x] CLI: --length --height --alpha --unit --vertical
+- [x] Flicker reduction (throttled monitor query, coalesced motion)
+- [x] Rename project to rulertoo; fix nixpkgs xorg deprecations
 
-## Open / later
-- [ ] Vertical orientation / rotation
-- [ ] Mouse wheel or keys to change length
-- [ ] Persist position
-- [ ] Multi-monitor edge cases (spanning)
-- [ ] Fallback when no ARGB / no compositor
-- [ ] XShape-only mode for non-compositing WMs
-- [ ] Improve alpha handling for marks on ARGB (ensure fully opaque)
+## Open
+- [ ] Smoother resize feedback / live length readout
+- [ ] Persist position/orientation/unit
+- [ ] Better vertical number layout
+- [ ] XShape-only mode without compositor
+- [ ] Fractional inch marks
 
-## Notes for next agent
-- Project source is under `/home/workdir/artifacts/x11-ruler`
-- Bundle naming: x11-ruler-NNN.M-slug-baseshort.bundle
-- Base of this line: `018568f` (fixed for the stack)
-- Full compile/test not run in agent env (Nix/X11 limited); verify locally with `nix build` or cmake.
-- To continue: `git pull /path/to/x11-ruler-001.1-initial-018568f.bundle HEAD`
+## Notes
+- Base of work line: 018568f
+- Source: /home/workdir/artifacts/rulertoo

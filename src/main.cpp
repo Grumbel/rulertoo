@@ -12,21 +12,35 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
 namespace {
 
-constexpr int kDefaultLengthMm = 300;  // 30 cm
-constexpr int kRulerHeightPx = 48;     // fixed pixel height of the strip
-constexpr double kBgAlpha = 0.45;      // background alpha when ARGB available
+constexpr int kDefaultLengthMm = 300;
+constexpr int kDefaultHeightPx = 52;
+constexpr double kDefaultBgAlpha = 0.40;
+constexpr int kHandlePx = 8;           // left/right resize handle width
+constexpr int kRotateBtn = 18;         // size of rotate button area
+
+enum class Unit { Mm, Cm, Inch, Pixel };
 
 struct MonitorInfo {
   int x = 0, y = 0;
   int width_px = 0, height_px = 0;
   int width_mm = 0, height_mm = 0;
   std::string name;
+};
+
+struct Options {
+  int length_mm = kDefaultLengthMm;
+  int height_px = kDefaultHeightPx;
+  double bg_alpha = kDefaultBgAlpha;
+  Unit unit = Unit::Cm;
+  bool vertical = false;
+  bool help = false;
 };
 
 struct App {
@@ -41,15 +55,21 @@ struct App {
   GC gc = 0;
   XRenderPictFormat* pict_format = nullptr;
 
-  int length_mm = kDefaultLengthMm;
+  Options opts;
   int win_x = 100, win_y = 100;
-  int win_w = 0, win_h = kRulerHeightPx;
+  int win_w = 0, win_h = 0;
 
-  bool dragging = false;
+  // Interaction
+  enum class DragMode { None, Move, ResizeLeft, ResizeRight, Origin, RotateHint };
+  DragMode drag = DragMode::None;
   int drag_off_x = 0, drag_off_y = 0;
+  int drag_start_length = 0;
+  int drag_start_origin = 0;
+  int origin_mm = 0;          // numbering origin shift (mm)
 
   std::vector<MonitorInfo> monitors;
   const MonitorInfo* current_monitor = nullptr;
+  std::string current_monitor_name;
 
   Atom atom_wm_delete = 0;
   Atom atom_net_wm_state = 0;
@@ -58,8 +78,90 @@ struct App {
 };
 
 void die(const char* msg) {
-  std::fprintf(stderr, "x11-ruler: %s\n", msg);
+  std::fprintf(stderr, "rulertoo: %s\n", msg);
   std::exit(1);
+}
+
+const char* unit_name(Unit u) {
+  switch (u) {
+    case Unit::Mm: return "mm";
+    case Unit::Cm: return "cm";
+    case Unit::Inch: return "in";
+    case Unit::Pixel: return "px";
+  }
+  return "?";
+}
+
+void print_usage(const char* prog) {
+  std::printf(
+      "Usage: %s [options]\n"
+      "\n"
+      "Borderless on-screen ruler using real physical dimensions from XRandR.\n"
+      "\n"
+      "Options:\n"
+      "  -l, --length MM     Physical length in millimetres (default: %d)\n"
+      "  -H, --height PX     Thickness in pixels (default: %d)\n"
+      "  -a, --alpha A       Background alpha 0.0-1.0 (default: %.2f)\n"
+      "  -u, --unit UNIT     Display unit: cm|mm|in|px (default: cm)\n"
+      "  -v, --vertical      Start in vertical orientation\n"
+      "  -h, --help          Show this help\n"
+      "\n"
+      "Controls:\n"
+      "  Left-drag           Move the ruler\n"
+      "  Left-drag edges     Resize length (handles on both ends)\n"
+      "  Middle-drag        Shift numbering origin\n"
+      "  Right-click end    Toggle orientation (or use rotate handle)\n"
+      "  u                  Cycle units (cm -> mm -> in -> px)\n"
+      "  r                  Rotate horizontal/vertical\n"
+      "  Esc / q            Quit\n"
+      "\n",
+      prog, kDefaultLengthMm, kDefaultHeightPx, kDefaultBgAlpha);
+}
+
+Options parse_args(int argc, char** argv) {
+  Options o;
+  for (int i = 1; i < argc; ++i) {
+    const char* a = argv[i];
+    auto need = [&](const char* name) -> const char* {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "rulertoo: %s requires an argument\n", name);
+        std::exit(2);
+      }
+      return argv[++i];
+    };
+    if (!std::strcmp(a, "-h") || !std::strcmp(a, "--help")) {
+      o.help = true;
+    } else if (!std::strcmp(a, "-l") || !std::strcmp(a, "--length")) {
+      o.length_mm = std::atoi(need("--length"));
+      if (o.length_mm < 20) o.length_mm = 20;
+      if (o.length_mm > 2000) o.length_mm = 2000;
+    } else if (!std::strcmp(a, "-H") || !std::strcmp(a, "--height")) {
+      o.height_px = std::atoi(need("--height"));
+      if (o.height_px < 28) o.height_px = 28;
+      if (o.height_px > 200) o.height_px = 200;
+    } else if (!std::strcmp(a, "-a") || !std::strcmp(a, "--alpha")) {
+      o.bg_alpha = std::atof(need("--alpha"));
+      if (o.bg_alpha < 0.0) o.bg_alpha = 0.0;
+      if (o.bg_alpha > 1.0) o.bg_alpha = 1.0;
+    } else if (!std::strcmp(a, "-u") || !std::strcmp(a, "--unit")) {
+      const char* u = need("--unit");
+      if (!std::strcmp(u, "cm")) o.unit = Unit::Cm;
+      else if (!std::strcmp(u, "mm")) o.unit = Unit::Mm;
+      else if (!std::strcmp(u, "in") || !std::strcmp(u, "inch")) o.unit = Unit::Inch;
+      else if (!std::strcmp(u, "px") || !std::strcmp(u, "pixel")) o.unit = Unit::Pixel;
+      else {
+        std::fprintf(stderr, "rulertoo: unknown unit '%s'\n", u);
+        std::exit(2);
+      }
+    } else if (!std::strcmp(a, "-v") || !std::strcmp(a, "--vertical")) {
+      o.vertical = true;
+    } else {
+      std::fprintf(stderr, "rulertoo: unknown option: %s\n", a);
+      print_usage(argv[0]);
+      std::exit(2);
+    }
+  }
+  return o;
 }
 
 std::vector<MonitorInfo> query_monitors(Display* dpy, Window root) {
@@ -86,9 +188,8 @@ std::vector<MonitorInfo> query_monitors(Display* dpy, Window root) {
     m.width_mm = oi->mm_width > 0 ? static_cast<int>(oi->mm_width) : 0;
     m.height_mm = oi->mm_height > 0 ? static_cast<int>(oi->mm_height) : 0;
     m.name = oi->name ? oi->name : "unknown";
-    if (m.width_mm > 0 && m.height_mm > 0 && m.width_px > 0) {
+    if (m.width_mm > 0 && m.height_mm > 0 && m.width_px > 0)
       out.push_back(m);
-    }
     XRRFreeCrtcInfo(ci);
     XRRFreeOutputInfo(oi);
   }
@@ -96,8 +197,7 @@ std::vector<MonitorInfo> query_monitors(Display* dpy, Window root) {
 
   if (out.empty()) {
     MonitorInfo m;
-    m.x = 0;
-    m.y = 0;
+    m.x = 0; m.y = 0;
     m.width_px = DisplayWidth(dpy, DefaultScreen(dpy));
     m.height_px = DisplayHeight(dpy, DefaultScreen(dpy));
     m.width_mm = DisplayWidthMM(dpy, DefaultScreen(dpy));
@@ -112,9 +212,8 @@ const MonitorInfo* find_monitor_for_point(const std::vector<MonitorInfo>& mons,
                                           int px, int py) {
   for (const auto& m : mons) {
     if (px >= m.x && px < m.x + m.width_px &&
-        py >= m.y && py < m.y + m.height_px) {
+        py >= m.y && py < m.y + m.height_px)
       return &m;
-    }
   }
   if (mons.empty()) return nullptr;
   const MonitorInfo* best = &mons[0];
@@ -124,28 +223,27 @@ const MonitorInfo* find_monitor_for_point(const std::vector<MonitorInfo>& mons,
     int cy = m.y + m.height_px / 2;
     long dx = px - cx, dy = py - cy;
     long d = dx * dx + dy * dy;
-    if (d < best_d) {
-      best_d = d;
-      best = &m;
-    }
+    if (d < best_d) { best_d = d; best = &m; }
   }
   return best;
 }
 
-double px_per_mm(const MonitorInfo& m) {
+double px_per_mm(const MonitorInfo& m, bool vertical) {
+  if (vertical) {
+    if (m.height_mm <= 0 || m.height_px <= 0) return 96.0 / 25.4;
+    return static_cast<double>(m.height_px) / static_cast<double>(m.height_mm);
+  }
   if (m.width_mm <= 0 || m.width_px <= 0) return 96.0 / 25.4;
   return static_cast<double>(m.width_px) / static_cast<double>(m.width_mm);
 }
 
 void set_borderless(App& app) {
   struct {
-    unsigned long flags;
-    unsigned long functions;
-    unsigned long decorations;
+    unsigned long flags, functions, decorations;
     long input_mode;
     unsigned long status;
   } hints = {};
-  hints.flags = 2;          // MWM_HINTS_DECORATIONS
+  hints.flags = 2;
   hints.decorations = 0;
   if (app.atom_motif_hints) {
     XChangeProperty(app.dpy, app.win, app.atom_motif_hints, app.atom_motif_hints,
@@ -156,6 +254,22 @@ void set_borderless(App& app) {
                     PropModeReplace,
                     reinterpret_cast<unsigned char*>(&app.atom_net_wm_state_above), 1);
   }
+}
+
+void apply_geometry(App& app) {
+  if (!app.current_monitor) return;
+  double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
+  int long_px = static_cast<int>(std::lround(app.opts.length_mm * ppm));
+  if (long_px < 60) long_px = 60;
+
+  if (app.opts.vertical) {
+    app.win_w = app.opts.height_px;
+    app.win_h = long_px;
+  } else {
+    app.win_w = long_px;
+    app.win_h = app.opts.height_px;
+  }
+  XResizeWindow(app.dpy, app.win, app.win_w, app.win_h);
 }
 
 void create_window(App& app) {
@@ -185,9 +299,21 @@ void create_window(App& app) {
 
   app.monitors = query_monitors(app.dpy, app.root);
   app.current_monitor = app.monitors.empty() ? nullptr : &app.monitors[0];
-  double ppm = app.current_monitor ? px_per_mm(*app.current_monitor) : (96.0 / 25.4);
-  app.win_w = static_cast<int>(std::lround(app.length_mm * ppm));
-  app.win_h = kRulerHeightPx;
+  if (app.current_monitor)
+    app.current_monitor_name = app.current_monitor->name;
+
+  double ppm = app.current_monitor
+                   ? px_per_mm(*app.current_monitor, app.opts.vertical)
+                   : (96.0 / 25.4);
+  int long_px = static_cast<int>(std::lround(app.opts.length_mm * ppm));
+  if (long_px < 60) long_px = 60;
+  if (app.opts.vertical) {
+    app.win_w = app.opts.height_px;
+    app.win_h = long_px;
+  } else {
+    app.win_w = long_px;
+    app.win_h = app.opts.height_px;
+  }
 
   app.win = XCreateWindow(app.dpy, app.root, app.win_x, app.win_y, app.win_w,
                           app.win_h, 0, app.depth, InputOutput, app.visual,
@@ -199,7 +325,7 @@ void create_window(App& app) {
   app.atom_net_wm_state_above = XInternAtom(app.dpy, "_NET_WM_STATE_ABOVE", False);
   app.atom_motif_hints = XInternAtom(app.dpy, "_MOTIF_WM_HINTS", False);
 
-  XStoreName(app.dpy, app.win, "x11-ruler");
+  XStoreName(app.dpy, app.win, "rulertoo");
   set_borderless(app);
 
   Atom type = XInternAtom(app.dpy, "_NET_WM_WINDOW_TYPE", False);
@@ -208,100 +334,268 @@ void create_window(App& app) {
                   reinterpret_cast<unsigned char*>(&utility), 1);
 
   app.gc = XCreateGC(app.dpy, app.win, 0, nullptr);
-
-  if (app.has_argb) {
+  if (app.has_argb)
     app.pict_format = XRenderFindVisualFormat(app.dpy, app.visual);
-  }
 
   XMapWindow(app.dpy, app.win);
   XFlush(app.dpy);
 }
 
-void update_size_for_monitor(App& app) {
-  if (!app.current_monitor) return;
-  double ppm = px_per_mm(*app.current_monitor);
-  int new_w = static_cast<int>(std::lround(app.length_mm * ppm));
-  if (new_w < 50) new_w = 50;
-  if (new_w != app.win_w) {
-    app.win_w = new_w;
-    XResizeWindow(app.dpy, app.win, app.win_w, app.win_h);
-  }
-}
-
-void refresh_monitor(App& app) {
-  app.monitors = query_monitors(app.dpy, app.root);
+bool refresh_monitor(App& app, bool force) {
+  static int last_cx = -99999, last_cy = -99999;
   int cx = app.win_x + app.win_w / 2;
   int cy = app.win_y + app.win_h / 2;
+  if (!force && std::abs(cx - last_cx) < 50 && std::abs(cy - last_cy) < 50)
+    return false;
+  last_cx = cx;
+  last_cy = cy;
+
+  app.monitors = query_monitors(app.dpy, app.root);
   const MonitorInfo* m = find_monitor_for_point(app.monitors, cx, cy);
-  if (m != app.current_monitor) {
-    app.current_monitor = m;
-    update_size_for_monitor(app);
-  } else if (m) {
-    update_size_for_monitor(app);
-  }
+  if (!m) return false;
+
+  bool changed = (m->name != app.current_monitor_name);
+  app.current_monitor = m;
+  app.current_monitor_name = m->name;
+  if (changed || force)
+    apply_geometry(app);
+  return changed;
 }
 
-void draw_ruler(App& app) {
-  if (!app.current_monitor) return;
-  double ppm = px_per_mm(*app.current_monitor);
-
+void fill_bg(App& app) {
   if (app.has_argb && app.pict_format) {
     XRenderColor color = {};
-    unsigned short a = static_cast<unsigned short>(kBgAlpha * 0xffff);
+    unsigned short a = static_cast<unsigned short>(app.opts.bg_alpha * 0xffff);
     color.alpha = a;
-    color.red = static_cast<unsigned short>(0xe0 * kBgAlpha * 0xff);
-    color.green = static_cast<unsigned short>(0xe8 * kBgAlpha * 0xff);
-    color.blue = static_cast<unsigned short>(0xf0 * kBgAlpha * 0xff);
+    color.red   = static_cast<unsigned short>(0xd0 * app.opts.bg_alpha * 0xff);
+    color.green = static_cast<unsigned short>(0xd8 * app.opts.bg_alpha * 0xff);
+    color.blue  = static_cast<unsigned short>(0xe0 * app.opts.bg_alpha * 0xff);
     Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
     XRenderFillRectangle(app.dpy, PictOpSrc, pict, &color, 0, 0, app.win_w, app.win_h);
     XRenderFreePicture(app.dpy, pict);
   } else {
-    XSetForeground(app.dpy, app.gc, 0xd0d8e0);
+    XSetForeground(app.dpy, app.gc, 0xc8d0d8);
     XFillRectangle(app.dpy, app.win, app.gc, 0, 0, app.win_w, app.win_h);
   }
+}
 
-  XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
+void opaque_rect(App& app, int x, int y, int w, int h) {
+  if (w <= 0 || h <= 0) return;
+  if (app.has_argb && app.pict_format) {
+    XRenderColor black = {0, 0, 0, 0xffff};
+    Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+    XRenderFillRectangle(app.dpy, PictOpSrc, pict, &black, x, y, w, h);
+    XRenderFreePicture(app.dpy, pict);
+  } else {
+    XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
+    XFillRectangle(app.dpy, app.win, app.gc, x, y, w, h);
+  }
+}
 
-  const int bottom = app.win_h - 2;
-  const int full_h = bottom - 2;
+void opaque_line(App& app, int x1, int y1, int x2, int y2) {
+  if (x1 == x2)
+    opaque_rect(app, x1, std::min(y1, y2), 1, std::abs(y2 - y1) + 1);
+  else if (y1 == y2)
+    opaque_rect(app, std::min(x1, x2), y1, std::abs(x2 - x1) + 1, 1);
+  else {
+    XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
+    XDrawLine(app.dpy, app.win, app.gc, x1, y1, x2, y2);
+  }
+}
+
+// Convert mm position to display label value based on unit + origin
+double label_value(App& app, int mm_from_origin) {
+  int abs_mm = mm_from_origin;  // already relative to origin
+  switch (app.opts.unit) {
+    case Unit::Mm: return abs_mm;
+    case Unit::Cm: return abs_mm / 10.0;
+    case Unit::Inch: return abs_mm / 25.4;
+    case Unit::Pixel: {
+      if (!app.current_monitor) return abs_mm;
+      double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
+      return abs_mm * ppm;
+    }
+  }
+  return abs_mm;
+}
+
+int major_step_mm(App& app) {
+  switch (app.opts.unit) {
+    case Unit::Mm: return 10;      // number every 10 mm
+    case Unit::Cm: return 10;      // every cm
+    case Unit::Inch: return 25;    // ~ every inch (25.4 rounded)
+    case Unit::Pixel: return 50;   // every 50 mm worth of pixels
+  }
+  return 10;
+}
+
+void draw_ruler(App& app) {
+  if (!app.current_monitor) return;
+  fill_bg(app);
+
+  double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
+  const bool vert = app.opts.vertical;
+  const int long_side = vert ? app.win_h : app.win_w;
+  const int thick = vert ? app.win_w : app.win_h;
+
+  const int edge = thick - 2;
+  const int full_h = edge - 2;
   const int mid_h = full_h * 2 / 3;
   const int short_h = full_h / 3;
 
-  XDrawLine(app.dpy, app.win, app.gc, 0, bottom, app.win_w, bottom);
+  // Baseline
+  if (vert)
+    opaque_line(app, edge, 0, edge, long_side - 1);
+  else
+    opaque_line(app, 0, edge, long_side - 1, edge);
 
   XFontStruct* font = XLoadQueryFont(app.dpy, "fixed");
   if (!font) font = XLoadQueryFont(app.dpy, "6x13");
   if (font) XSetFont(app.dpy, app.gc, font->fid);
+  XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
 
-  for (int mm = 0; mm <= app.length_mm; ++mm) {
-    int x = static_cast<int>(std::lround(mm * ppm));
-    if (x < 0 || x >= app.win_w) continue;
+  // Marks from 0..length, shifted by origin_mm for labels
+  for (int mm = 0; mm <= app.opts.length_mm; ++mm) {
+    int pos = static_cast<int>(std::lround(mm * ppm));
+    if (pos < 0 || pos >= long_side) continue;
 
     int h = short_h;
-    if (mm % 10 == 0) {
-      h = full_h;
-    } else if (mm % 5 == 0) {
-      h = mid_h;
-    }
-    XDrawLine(app.dpy, app.win, app.gc, x, bottom - h, x, bottom);
+    if (mm % 10 == 0) h = full_h;
+    else if (mm % 5 == 0) h = mid_h;
 
-    if (mm % 10 == 0 && font) {
-      char buf[16];
-      std::snprintf(buf, sizeof(buf), "%d", mm / 10);
-      int tw = XTextWidth(font, buf, static_cast<int>(std::strlen(buf)));
-      int tx = x - tw / 2;
-      if (tx < 1) tx = 1;
-      if (tx + tw > app.win_w - 1) tx = app.win_w - 1 - tw;
-      XDrawString(app.dpy, app.win, app.gc, tx, bottom - full_h - 2, buf,
-                  static_cast<int>(std::strlen(buf)));
+    if (vert)
+      opaque_line(app, edge - h, pos, edge, pos);
+    else
+      opaque_line(app, pos, edge - h, pos, edge);
+
+    // Numbers at major steps, using origin
+    int step = major_step_mm(app);
+    if (mm % step == 0 && font) {
+      int rel = mm - app.origin_mm;
+      double val = label_value(app, rel);
+      char buf[24];
+      if (app.opts.unit == Unit::Inch)
+        std::snprintf(buf, sizeof(buf), "%.1f", val);
+      else if (app.opts.unit == Unit::Pixel)
+        std::snprintf(buf, sizeof(buf), "%.0f", val);
+      else if (app.opts.unit == Unit::Cm && (rel % 10 == 0))
+        std::snprintf(buf, sizeof(buf), "%.0f", val);
+      else if (app.opts.unit == Unit::Mm)
+        std::snprintf(buf, sizeof(buf), "%d", rel);
+      else
+        std::snprintf(buf, sizeof(buf), "%.0f", val);
+
+      // Skip empty / odd cm labels when unit is cm and not on full cm relative
+      if (app.opts.unit == Unit::Cm && (rel % 10 != 0) && (mm % 10 == 0))
+        continue;
+
+      int len = static_cast<int>(std::strlen(buf));
+      int tw = XTextWidth(font, buf, len);
+      if (vert) {
+        int tx = 2;
+        int ty = pos + 4;
+        XDrawString(app.dpy, app.win, app.gc, tx, ty, buf, len);
+      } else {
+        int tx = pos - tw / 2;
+        if (tx < 2) tx = 2;
+        if (tx + tw > long_side - 2) tx = long_side - 2 - tw;
+        int ty = edge - full_h - 2;
+        if (ty < 10) ty = 10;
+        XDrawString(app.dpy, app.win, app.gc, tx, ty, buf, len);
+      }
     }
   }
 
+  // Resize handles (darker bars)
+  if (vert) {
+    opaque_rect(app, 0, 0, thick, kHandlePx);
+    opaque_rect(app, 0, long_side - kHandlePx, thick, kHandlePx);
+  } else {
+    opaque_rect(app, 0, 0, kHandlePx, thick);
+    opaque_rect(app, long_side - kHandlePx, 0, kHandlePx, thick);
+  }
+
+  // Rotate button (top-left-ish, after handle)
+  int rbx = vert ? 2 : kHandlePx + 2;
+  int rby = vert ? kHandlePx + 2 : 2;
+  opaque_rect(app, rbx, rby, kRotateBtn, kRotateBtn);
+  // Simple "R" or cross for rotate
+  if (font) {
+    XDrawString(app.dpy, app.win, app.gc, rbx + 4, rby + 13, "R", 1);
+  }
+
+  // Unit indicator bottom-right / end
+  if (font) {
+    char ubuf[16];
+    std::snprintf(ubuf, sizeof(ubuf), "%s", unit_name(app.opts.unit));
+    int ulen = static_cast<int>(std::strlen(ubuf));
+    int utw = XTextWidth(font, ubuf, ulen);
+    if (vert)
+      XDrawString(app.dpy, app.win, app.gc, 2, long_side - kHandlePx - 4, ubuf, ulen);
+    else
+      XDrawString(app.dpy, app.win, app.gc, long_side - utw - kHandlePx - 4, 12, ubuf, ulen);
+  }
+
+  // Border
+  opaque_line(app, 0, 0, app.win_w - 1, 0);
+  opaque_line(app, 0, app.win_h - 1, app.win_w - 1, app.win_h - 1);
+  opaque_line(app, 0, 0, 0, app.win_h - 1);
+  opaque_line(app, app.win_w - 1, 0, app.win_w - 1, app.win_h - 1);
+
   if (font) XFreeFont(app.dpy, font);
-
-  XDrawRectangle(app.dpy, app.win, app.gc, 0, 0, app.win_w - 1, app.win_h - 1);
-
   XFlush(app.dpy);
+}
+
+void cycle_unit(App& app) {
+  switch (app.opts.unit) {
+    case Unit::Cm: app.opts.unit = Unit::Mm; break;
+    case Unit::Mm: app.opts.unit = Unit::Inch; break;
+    case Unit::Inch: app.opts.unit = Unit::Pixel; break;
+    case Unit::Pixel: app.opts.unit = Unit::Cm; break;
+  }
+  draw_ruler(app);
+}
+
+void toggle_orient(App& app) {
+  // Keep centre roughly stable
+  int cx = app.win_x + app.win_w / 2;
+  int cy = app.win_y + app.win_h / 2;
+  app.opts.vertical = !app.opts.vertical;
+  apply_geometry(app);
+  app.win_x = cx - app.win_w / 2;
+  app.win_y = cy - app.win_h / 2;
+  XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
+  draw_ruler(app);
+}
+
+void quit(App& app) {
+  XUnmapWindow(app.dpy, app.win);
+  XDestroyWindow(app.dpy, app.win);
+  XCloseDisplay(app.dpy);
+  std::exit(0);
+}
+
+App::DragMode hit_test(App& app, int x, int y) {
+  const bool vert = app.opts.vertical;
+  const int long_side = vert ? app.win_h : app.win_w;
+  const int thick = vert ? app.win_w : app.win_h;
+
+  // Resize handles
+  if (vert) {
+    if (y < kHandlePx) return App::DragMode::ResizeLeft;   // top
+    if (y >= long_side - kHandlePx) return App::DragMode::ResizeRight; // bottom
+  } else {
+    if (x < kHandlePx) return App::DragMode::ResizeLeft;
+    if (x >= long_side - kHandlePx) return App::DragMode::ResizeRight;
+  }
+
+  // Rotate button
+  int rbx = vert ? 2 : kHandlePx + 2;
+  int rby = vert ? kHandlePx + 2 : 2;
+  if (x >= rbx && x < rbx + kRotateBtn && y >= rby && y < rby + kRotateBtn)
+    return App::DragMode::RotateHint;
+
+  return App::DragMode::Move;
 }
 
 void handle_event(App& app, XEvent& ev) {
@@ -309,61 +603,138 @@ void handle_event(App& app, XEvent& ev) {
     case Expose:
       if (ev.xexpose.count == 0) draw_ruler(app);
       break;
+
     case ConfigureNotify:
       app.win_x = ev.xconfigure.x;
       app.win_y = ev.xconfigure.y;
-      if (ev.xconfigure.width != app.win_w || ev.xconfigure.height != app.win_h) {
+      if (ev.xconfigure.width != app.win_w || ev.xconfigure.height != app.win_h)
         XResizeWindow(app.dpy, app.win, app.win_w, app.win_h);
-      }
-      refresh_monitor(app);
       break;
-    case ButtonPress:
+
+    case ButtonPress: {
+      int bx = ev.xbutton.x;
+      int by = ev.xbutton.y;
       if (ev.xbutton.button == Button1) {
-        app.dragging = true;
-        app.drag_off_x = ev.xbutton.x;
-        app.drag_off_y = ev.xbutton.y;
+        App::DragMode mode = hit_test(app, bx, by);
+        if (mode == App::DragMode::RotateHint) {
+          toggle_orient(app);
+          break;
+        }
+        app.drag = mode;
+        app.drag_off_x = bx;
+        app.drag_off_y = by;
+        app.drag_start_length = app.opts.length_mm;
+        if (mode == App::DragMode::ResizeLeft || mode == App::DragMode::ResizeRight) {
+          // keep
+        }
+      } else if (ev.xbutton.button == Button2) {
+        // Middle: drag origin
+        app.drag = App::DragMode::Origin;
+        app.drag_off_x = bx;
+        app.drag_off_y = by;
+        app.drag_start_origin = app.origin_mm;
       } else if (ev.xbutton.button == Button3) {
-        XUnmapWindow(app.dpy, app.win);
-        XDestroyWindow(app.dpy, app.win);
-        XCloseDisplay(app.dpy);
-        std::exit(0);
-      }
-      break;
-    case ButtonRelease:
-      if (ev.xbutton.button == Button1) {
-        app.dragging = false;
-        refresh_monitor(app);
-        draw_ruler(app);
-      }
-      break;
-    case MotionNotify:
-      if (app.dragging) {
-        int nx = ev.xmotion.x_root - app.drag_off_x;
-        int ny = ev.xmotion.y_root - app.drag_off_y;
-        app.win_x = nx;
-        app.win_y = ny;
-        XMoveWindow(app.dpy, app.win, nx, ny);
-        refresh_monitor(app);
-      }
-      break;
-    case KeyPress: {
-      KeySym ks = XLookupKeysym(&ev.xkey, 0);
-      if (ks == XK_Escape || ks == XK_q) {
-        XUnmapWindow(app.dpy, app.win);
-        XDestroyWindow(app.dpy, app.win);
-        XCloseDisplay(app.dpy);
-        std::exit(0);
+        // Right on handle area -> rotate, else quit
+        App::DragMode mode = hit_test(app, bx, by);
+        if (mode == App::DragMode::ResizeLeft || mode == App::DragMode::ResizeRight ||
+            mode == App::DragMode::RotateHint)
+          toggle_orient(app);
+        else
+          quit(app);
       }
       break;
     }
-    case ClientMessage:
-      if (static_cast<Atom>(ev.xclient.data.l[0]) == app.atom_wm_delete) {
-        XUnmapWindow(app.dpy, app.win);
-        XDestroyWindow(app.dpy, app.win);
-        XCloseDisplay(app.dpy);
-        std::exit(0);
+
+    case ButtonRelease:
+      if (ev.xbutton.button == Button1 || ev.xbutton.button == Button2) {
+        app.drag = App::DragMode::None;
+        refresh_monitor(app, true);
+        draw_ruler(app);
       }
       break;
+
+    case MotionNotify:
+      if (app.drag == App::DragMode::None) break;
+      // Coalesce
+      while (XPending(app.dpy)) {
+        XEvent peek;
+        XPeekEvent(app.dpy, &peek);
+        if (peek.type != MotionNotify) break;
+        XNextEvent(app.dpy, &ev);
+      }
+      {
+        int mx = ev.xmotion.x_root;
+        int my = ev.xmotion.y_root;
+        int lx = ev.xmotion.x;
+        int ly = ev.xmotion.y;
+
+        if (app.drag == App::DragMode::Move) {
+          int nx = mx - app.drag_off_x;
+          int ny = my - app.drag_off_y;
+          app.win_x = nx;
+          app.win_y = ny;
+          XMoveWindow(app.dpy, app.win, nx, ny);
+          if (refresh_monitor(app, false))
+            draw_ruler(app);
+        } else if (app.drag == App::DragMode::ResizeLeft ||
+                   app.drag == App::DragMode::ResizeRight) {
+          if (!app.current_monitor) break;
+          double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
+          int delta_px = app.opts.vertical
+                             ? (ly - app.drag_off_y)
+                             : (lx - app.drag_off_x);
+          if (app.drag == App::DragMode::ResizeLeft)
+            delta_px = -delta_px;
+          int delta_mm = static_cast<int>(std::lround(delta_px / ppm));
+          int new_len = app.drag_start_length + delta_mm;
+          if (new_len < 30) new_len = 30;
+          if (new_len > 2000) new_len = 2000;
+          if (new_len != app.opts.length_mm) {
+            // When resizing from left/top, also move the window so the
+            // opposite end stays fixed.
+            int old_long = app.opts.vertical ? app.win_h : app.win_w;
+            app.opts.length_mm = new_len;
+            apply_geometry(app);
+            int new_long = app.opts.vertical ? app.win_h : app.win_w;
+            if (app.drag == App::DragMode::ResizeLeft) {
+              int d = new_long - old_long;
+              if (app.opts.vertical)
+                app.win_y -= d;
+              else
+                app.win_x -= d;
+              XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
+            }
+            draw_ruler(app);
+          }
+        } else if (app.drag == App::DragMode::Origin) {
+          if (!app.current_monitor) break;
+          double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
+          int delta_px = app.opts.vertical
+                             ? (ly - app.drag_off_y)
+                             : (lx - app.drag_off_x);
+          int delta_mm = static_cast<int>(std::lround(delta_px / ppm));
+          app.origin_mm = app.drag_start_origin + delta_mm;
+          draw_ruler(app);
+        }
+      }
+      break;
+
+    case KeyPress: {
+      KeySym ks = XLookupKeysym(&ev.xkey, 0);
+      if (ks == XK_Escape || ks == XK_q)
+        quit(app);
+      else if (ks == XK_u || ks == XK_U)
+        cycle_unit(app);
+      else if (ks == XK_r || ks == XK_R)
+        toggle_orient(app);
+      break;
+    }
+
+    case ClientMessage:
+      if (static_cast<Atom>(ev.xclient.data.l[0]) == app.atom_wm_delete)
+        quit(app);
+      break;
+
     default:
       break;
   }
@@ -371,18 +742,23 @@ void handle_event(App& app, XEvent& ev) {
 
 }  // namespace
 
-int main(int /*argc*/, char** /*argv*/) {
+int main(int argc, char** argv) {
   App app;
+  app.opts = parse_args(argc, argv);
+  if (app.opts.help) {
+    print_usage(argv[0]);
+    return 0;
+  }
+
   app.dpy = XOpenDisplay(nullptr);
   if (!app.dpy) die("cannot open X display");
 
   int event_base, error_base;
-  if (!XRRQueryExtension(app.dpy, &event_base, &error_base)) {
-    std::fprintf(stderr, "x11-ruler: XRandR not available, using fallback sizes\n");
-  }
+  if (!XRRQueryExtension(app.dpy, &event_base, &error_base))
+    std::fprintf(stderr, "rulertoo: XRandR not available, using fallback sizes\n");
 
   create_window(app);
-  refresh_monitor(app);
+  refresh_monitor(app, true);
   draw_ruler(app);
 
   XEvent ev;
