@@ -1,21 +1,22 @@
 # TODO — rulertoo
 
 ## Current tip
-`8dfd73a` — High-contrast free-end resize grip
+`8d17bb4` — Exact integer scale; fix -0; end tick included
 
-Bundle: `/home/workdir/artifacts/rulertoo-014.1-grip-contrast-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-015.1-exact-scale-018568f.bundle`
 
 ## Done
-- [x] Physical XRandR ruler with dual marks, free-end controls
-- [x] Opaque ARGB text; pointer-monitor placement
-- [x] Locked-origin resize; amber high-contrast grip
+- [x] Integer mm↔px mapping, end tick on last pixel
+- [x] No "-0" labels
+- [x] High-contrast grip; locked-origin resize; ARGB text; etc.
 
 ## Open
 - [ ] Persist position/orientation/unit
 - [ ] Full CRTC transform matrix
 - [ ] XShape-only mode
-- [ ] Fractional inch marks
+- [ ] Optional manual calibration if EDID mm is wrong
 
 ## Notes
 - Base: `018568f`
 - Source: `/home/workdir/artifacts/rulertoo`
+- 7mm/30cm-class errors usually mean the monitor reports wrong mm in RandR
