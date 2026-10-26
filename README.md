@@ -8,7 +8,7 @@ from XRandR (not global DPI).
 - Classic marks: mm / 5 mm / cm
 - Scales to the monitor it sits on (XRandR mm sizes)
 - Horizontal or vertical
-- Resize by dragging the end handles
+- Resize by dragging the free-end handle (right or bottom)
 - Shift numbering origin with middle-button drag
 - Units: cm, mm, inch, pixel (cycle with `u`)
 - Semi-transparent background; marks drawn fully opaque
@@ -19,7 +19,7 @@ from XRandR (not global DPI).
 | Input | Action |
 |-------|--------|
 | Left-drag body | Move |
-| Left-drag ends | Resize length |
+| Drag free end | Resize length |
 | Middle-drag | Shift zero / numbering origin |
 | Click **R** button or `r` | Rotate |
 | `u` | Cycle unit |

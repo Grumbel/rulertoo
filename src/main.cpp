@@ -22,7 +22,7 @@ namespace {
 constexpr int kDefaultLengthMm = 300;
 constexpr int kDefaultHeightPx = 52;
 constexpr double kDefaultBgAlpha = 0.40;
-constexpr int kHandlePx = 8;           // left/right resize handle width
+constexpr int kHandlePx = 10;          // free-end (right/bottom) resize handle
 constexpr int kRotateBtn = 18;         // size of rotate button area
 
 enum class Unit { Mm, Cm, Inch, Pixel };
@@ -74,7 +74,7 @@ struct App {
   int win_w = 0, win_h = 0;
 
   // Interaction
-  enum class DragMode { Idle, Move, ResizeLeft, ResizeRight, Origin, RotateHint };
+  enum class DragMode { Idle, Move, ResizeRight, Origin, RotateHint };
   DragMode drag = DragMode::Idle;
   int drag_off_x = 0, drag_off_y = 0;
   int drag_start_length = 0;
@@ -122,9 +122,9 @@ void print_usage(const char* prog) {
       "\n"
       "Controls:\n"
       "  Left-drag           Move the ruler\n"
-      "  Left-drag edges     Resize length (handles on both ends)\n"
+      "  Drag free end         Resize length (right/bottom handle)\n"
       "  Middle-drag        Shift numbering origin\n"
-      "  Right-click end    Toggle orientation (or use rotate handle)\n"
+      "  Right-click handle   Toggle orientation (or R button / key r)\n"
       "  u                  Cycle units (cm -> mm -> in -> px)\n"
       "  r                  Rotate horizontal/vertical\n"
       "  Esc / q            Quit\n"
@@ -539,18 +539,15 @@ void draw_ruler(App& app) {
     }
   }
 
-  // Resize handles (darker bars)
-  if (vert) {
-    opaque_rect(app, 0, 0, thick, kHandlePx);
+  // Resize handle on the free end only (right / bottom)
+  if (vert)
     opaque_rect(app, 0, long_side - kHandlePx, thick, kHandlePx);
-  } else {
-    opaque_rect(app, 0, 0, kHandlePx, thick);
+  else
     opaque_rect(app, long_side - kHandlePx, 0, kHandlePx, thick);
-  }
 
-  // Rotate button (top-left-ish, after handle)
-  int rbx = vert ? 2 : kHandlePx + 2;
-  int rby = vert ? kHandlePx + 2 : 2;
+  // Rotate button at the fixed origin corner
+  int rbx = 2;
+  int rby = 2;
   opaque_rect(app, rbx, rby, kRotateBtn, kRotateBtn);
   // Simple "R" or cross for rotate
   if (font) {
@@ -622,20 +619,16 @@ void quit(App& app) {
 App::DragMode hit_test(App& app, int x, int y) {
   const bool vert = app.opts.vertical;
   const int long_side = vert ? app.win_h : app.win_w;
-  const int thick = vert ? app.win_w : app.win_h;
 
-  // Resize handles
+  // Resize handle on free end only (right / bottom)
   if (vert) {
-    if (y < kHandlePx) return App::DragMode::ResizeLeft;   // top
-    if (y >= long_side - kHandlePx) return App::DragMode::ResizeRight; // bottom
+    if (y >= long_side - kHandlePx) return App::DragMode::ResizeRight;
   } else {
-    if (x < kHandlePx) return App::DragMode::ResizeLeft;
     if (x >= long_side - kHandlePx) return App::DragMode::ResizeRight;
   }
 
-  // Rotate button
-  int rbx = vert ? 2 : kHandlePx + 2;
-  int rby = vert ? kHandlePx + 2 : 2;
+  // Rotate button at origin corner
+  const int rbx = 2, rby = 2;
   if (x >= rbx && x < rbx + kRotateBtn && y >= rby && y < rby + kRotateBtn)
     return App::DragMode::RotateHint;
 
@@ -668,9 +661,7 @@ void handle_event(App& app, XEvent& ev) {
         app.drag_off_x = bx;
         app.drag_off_y = by;
         app.drag_start_length = app.opts.length_mm;
-        if (mode == App::DragMode::ResizeLeft || mode == App::DragMode::ResizeRight) {
-          // keep
-        }
+        // ResizeRight / Move / Origin handled in MotionNotify
       } else if (ev.xbutton.button == Button2) {
         // Middle: drag origin
         app.drag = App::DragMode::Origin;
@@ -680,8 +671,7 @@ void handle_event(App& app, XEvent& ev) {
       } else if (ev.xbutton.button == Button3) {
         // Right on handle area -> rotate, else quit
         App::DragMode mode = hit_test(app, bx, by);
-        if (mode == App::DragMode::ResizeLeft || mode == App::DragMode::ResizeRight ||
-            mode == App::DragMode::RotateHint)
+        if (mode == App::DragMode::ResizeRight || mode == App::DragMode::RotateHint)
           toggle_orient(app);
         else
           quit(app);
@@ -720,34 +710,20 @@ void handle_event(App& app, XEvent& ev) {
           XMoveWindow(app.dpy, app.win, nx, ny);
           if (refresh_monitor(app, false))
             draw_ruler(app);
-        } else if (app.drag == App::DragMode::ResizeLeft ||
-                   app.drag == App::DragMode::ResizeRight) {
+        } else if (app.drag == App::DragMode::ResizeRight) {
           if (!app.current_monitor) break;
           double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
           int delta_px = app.opts.vertical
                              ? (ly - app.drag_off_y)
                              : (lx - app.drag_off_x);
-          if (app.drag == App::DragMode::ResizeLeft)
-            delta_px = -delta_px;
           int delta_mm = static_cast<int>(std::lround(delta_px / ppm));
           int new_len = app.drag_start_length + delta_mm;
           if (new_len < 30) new_len = 30;
           if (new_len > 2000) new_len = 2000;
           if (new_len != app.opts.length_mm) {
-            // When resizing from left/top, also move the window so the
-            // opposite end stays fixed.
-            int old_long = app.opts.vertical ? app.win_h : app.win_w;
+            // Origin end stays fixed; only the free end moves.
             app.opts.length_mm = new_len;
             apply_geometry(app);
-            int new_long = app.opts.vertical ? app.win_h : app.win_w;
-            if (app.drag == App::DragMode::ResizeLeft) {
-              int d = new_long - old_long;
-              if (app.opts.vertical)
-                app.win_y -= d;
-              else
-                app.win_x -= d;
-              XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
-            }
             draw_ruler(app);
           }
         } else if (app.drag == App::DragMode::Origin) {
