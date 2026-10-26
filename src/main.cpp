@@ -76,7 +76,8 @@ struct App {
   // Interaction
   enum class DragMode { Idle, Move, ResizeRight, Origin, RotateHint };
   DragMode drag = DragMode::Idle;
-  int drag_off_x = 0, drag_off_y = 0;
+  int drag_off_x = 0, drag_off_y = 0;       // window-local grab offset (move)
+  int drag_root_x = 0, drag_root_y = 0;     // root grab pos (resize / origin)
   int drag_start_length = 0;
   int drag_start_origin = 0;
   int origin_mm = 0;          // numbering origin shift (mm)
@@ -502,7 +503,7 @@ void draw_ruler(App& app) {
     // vertical: band along X in the middle of thickness
     if (app.has_argb && app.pict_format) {
       XRenderColor band = {};
-      band.red = 0xffff; band.green = 0xf2f2; band.blue = 0xd0d0; band.alpha = 0xffff;
+      band.red = 0xffff; band.green = 0xfaf0; band.blue = 0xe8e0; band.alpha = 0xffff;
       Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
       XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, band_y0, 0, band_h, long_side);
       XRenderFreePicture(app.dpy, pict);
@@ -513,7 +514,7 @@ void draw_ruler(App& app) {
   } else {
     if (app.has_argb && app.pict_format) {
       XRenderColor band = {};
-      band.red = 0xffff; band.green = 0xf2f2; band.blue = 0xd0d0; band.alpha = 0xffff;
+      band.red = 0xffff; band.green = 0xfaf0; band.blue = 0xe8e0; band.alpha = 0xffff;
       Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
       XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, 0, band_y0, long_side, band_h);
       XRenderFreePicture(app.dpy, pict);
@@ -564,21 +565,34 @@ void draw_ruler(App& app) {
 
       int len = static_cast<int>(std::strlen(buf));
       int tw = XTextWidth(font, buf, len);
+      int pad = 2;
       int tx, ty;
       if (vert) {
-        tx = band_y0 + std::max(1, (band_h - tw) / 2);
-        // For vertical, draw numbers rotated is hard with core X; keep upright
-        // and centre in the band.
+        tx = band_y0 + 2;
         ty = pos + font->ascent / 2;
         if (ty < font->ascent + 1) ty = font->ascent + 1;
         if (ty > long_side - 2) ty = long_side - 2;
-        // horizontal string in vertical band is cramped; still draw centred
-        tx = band_y0 + 2;
       } else {
         tx = pos - tw / 2;
         if (tx < 2) tx = 2;
         if (tx + tw > long_side - 2) tx = long_side - 2 - tw;
         ty = band_y0 + font->ascent + 1;
+      }
+      // Fully opaque chip behind every label (ARGB-safe via XRender).
+      int cx = tx - pad;
+      int cy = ty - font->ascent - pad;
+      int cw = tw + 2 * pad;
+      int ch = font->ascent + font->descent + 2 * pad;
+      if (app.has_argb && app.pict_format) {
+        XRenderColor chip = {};
+        // Opaque near-white paper (16-bit channels, full alpha)
+        chip.red = 0xffff; chip.green = 0xf8f8; chip.blue = 0xe8e8; chip.alpha = 0xffff;
+        Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &chip, cx, cy, cw, ch);
+        XRenderFreePicture(app.dpy, pict);
+      } else {
+        XSetForeground(app.dpy, app.gc, 0xfff8e8);
+        XFillRectangle(app.dpy, app.win, app.gc, cx, cy, cw, ch);
       }
       XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
       XDrawString(app.dpy, app.win, app.gc, tx, ty, buf, len);
@@ -608,41 +622,27 @@ void draw_ruler(App& app) {
     XDrawString(app.dpy, app.win, app.gc, rbx + 5, rby + 13, "R", 1);
   }
 
-  // Unit indicator near free end
-  if (font) {
-    char ubuf[16];
-    std::snprintf(ubuf, sizeof(ubuf), "%s", unit_name(app.opts.unit));
-    int ulen = static_cast<int>(std::strlen(ubuf));
-    int utw = XTextWidth(font, ubuf, ulen);
-    int ux, uy;
-    if (vert) {
-      ux = band_y0 + 2;
-      uy = long_side - kHandlePx - kRotateBtn - 16;
-    } else {
-      ux = long_side - kHandlePx - kRotateBtn - utw - 6;
-      uy = band_y0 + font->ascent + 1;
-    }
-    if (ux < 2) ux = 2;
-    XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
-    XDrawString(app.dpy, app.win, app.gc, ux, uy, ubuf, ulen);
-  }
+  // Unit is included in the free-end length chip (e.g. "30.0 cm"); no extra tag at origin.
 
-  // Total length readout (always visible; updates live while resizing)
+  // Total length readout at the FREE END only (never at the origin).
   if (font) {
     std::string len_s = format_length(app);
     const char* lbuf = len_s.c_str();
     int llen = static_cast<int>(len_s.size());
     int ltw = XTextWidth(font, lbuf, llen);
+    int pad = 3;
     int lx, ly;
     if (vert) {
+      // above the R button / handle cluster
       lx = band_y0 + 2;
-      ly = font->ascent + 2;
+      ly = long_side - kHandlePx - kRotateBtn - 18;
     } else {
-      lx = 4;
+      // left of R button, still on free end
+      lx = long_side - kHandlePx - kRotateBtn - ltw - 10;
       ly = band_y0 + font->ascent + 1;
     }
-    // Chip background
-    int pad = 3;
+    if (lx < 2) lx = 2;
+    if (ly < font->ascent + 2) ly = font->ascent + 2;
     if (app.has_argb && app.pict_format) {
       XRenderColor chip = {};
       chip.red = 0x2020; chip.green = 0x2020; chip.blue = 0x2020; chip.alpha = 0xffff;
@@ -758,6 +758,8 @@ void handle_event(App& app, XEvent& ev) {
         app.drag = mode;
         app.drag_off_x = bx;
         app.drag_off_y = by;
+        app.drag_root_x = ev.xbutton.x_root;
+        app.drag_root_y = ev.xbutton.y_root;
         app.drag_start_length = app.opts.length_mm;
         // ResizeRight / Move / Origin handled in MotionNotify
       } else if (ev.xbutton.button == Button2) {
@@ -765,6 +767,8 @@ void handle_event(App& app, XEvent& ev) {
         app.drag = App::DragMode::Origin;
         app.drag_off_x = bx;
         app.drag_off_y = by;
+        app.drag_root_x = ev.xbutton.x_root;
+        app.drag_root_y = ev.xbutton.y_root;
         app.drag_start_origin = app.origin_mm;
       } else if (ev.xbutton.button == Button3) {
         // Right on handle area -> rotate, else quit
@@ -810,16 +814,18 @@ void handle_event(App& app, XEvent& ev) {
             draw_ruler(app);
         } else if (app.drag == App::DragMode::ResizeRight) {
           if (!app.current_monitor) break;
+          // Root-space delta keeps physical scale fixed while the window
+          // width changes (window-local coords would drift and look like
+          // the unit scale is changing).
           double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
           int delta_px = app.opts.vertical
-                             ? (ly - app.drag_off_y)
-                             : (lx - app.drag_off_x);
+                             ? (my - app.drag_root_y)
+                             : (mx - app.drag_root_x);
           int delta_mm = static_cast<int>(std::lround(delta_px / ppm));
           int new_len = app.drag_start_length + delta_mm;
           if (new_len < 30) new_len = 30;
           if (new_len > 2000) new_len = 2000;
           if (new_len != app.opts.length_mm) {
-            // Origin end stays fixed; only the free end moves.
             app.opts.length_mm = new_len;
             apply_geometry(app);
             draw_ruler(app);
@@ -828,8 +834,8 @@ void handle_event(App& app, XEvent& ev) {
           if (!app.current_monitor) break;
           double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
           int delta_px = app.opts.vertical
-                             ? (ly - app.drag_off_y)
-                             : (lx - app.drag_off_x);
+                             ? (my - app.drag_root_y)
+                             : (mx - app.drag_root_x);
           int delta_mm = static_cast<int>(std::lround(delta_px / ppm));
           app.origin_mm = app.drag_start_origin + delta_mm;
           draw_ruler(app);
