@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-(pending — calibration + smooth resize + xorgproto)
+`38a87db` — Smooth resize + per-monitor calibration (Shift-C)
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
