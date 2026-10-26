@@ -449,6 +449,31 @@ int major_step_mm(App& app) {
   return 10;
 }
 
+
+std::string format_length(const App& app) {
+  const int mm = app.opts.length_mm;
+  char buf[48];
+  switch (app.opts.unit) {
+    case Unit::Mm:
+      std::snprintf(buf, sizeof(buf), "%d mm", mm);
+      break;
+    case Unit::Cm:
+      std::snprintf(buf, sizeof(buf), "%.1f cm", mm / 10.0);
+      break;
+    case Unit::Inch:
+      std::snprintf(buf, sizeof(buf), "%.2f in", mm / 25.4);
+      break;
+    case Unit::Pixel: {
+      double ppm = app.current_monitor
+                       ? px_per_mm(*app.current_monitor, app.opts.vertical)
+                       : (96.0 / 25.4);
+      std::snprintf(buf, sizeof(buf), "%.0f px", mm * ppm);
+      break;
+    }
+  }
+  return buf;
+}
+
 void draw_ruler(App& app) {
   if (!app.current_monitor) return;
   fill_bg(app);
@@ -600,6 +625,41 @@ void draw_ruler(App& app) {
     if (ux < 2) ux = 2;
     XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
     XDrawString(app.dpy, app.win, app.gc, ux, uy, ubuf, ulen);
+  }
+
+  // Total length readout (always visible; updates live while resizing)
+  if (font) {
+    std::string len_s = format_length(app);
+    const char* lbuf = len_s.c_str();
+    int llen = static_cast<int>(len_s.size());
+    int ltw = XTextWidth(font, lbuf, llen);
+    int lx, ly;
+    if (vert) {
+      lx = band_y0 + 2;
+      ly = font->ascent + 2;
+    } else {
+      lx = 4;
+      ly = band_y0 + font->ascent + 1;
+    }
+    // Chip background
+    int pad = 3;
+    if (app.has_argb && app.pict_format) {
+      XRenderColor chip = {};
+      chip.red = 0x2020; chip.green = 0x2020; chip.blue = 0x2020; chip.alpha = 0xffff;
+      Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &chip,
+                           lx - pad, ly - font->ascent - pad,
+                           ltw + 2 * pad, font->ascent + font->descent + 2 * pad);
+      XRenderFreePicture(app.dpy, pict);
+      XSetForeground(app.dpy, app.gc, WhitePixel(app.dpy, app.screen));
+    } else {
+      XSetForeground(app.dpy, app.gc, 0x202020);
+      XFillRectangle(app.dpy, app.win, app.gc,
+                     lx - pad, ly - font->ascent - pad,
+                     ltw + 2 * pad, font->ascent + font->descent + 2 * pad);
+      XSetForeground(app.dpy, app.gc, WhitePixel(app.dpy, app.screen));
+    }
+    XDrawString(app.dpy, app.win, app.gc, lx, ly, lbuf, llen);
   }
 
   // Border
