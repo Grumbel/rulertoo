@@ -21,6 +21,10 @@
 
 namespace {
 
+#ifndef RULERTOO_VERSION
+#define RULERTOO_VERSION "unknown"
+#endif
+
 constexpr int kDefaultLengthMm = 300;
 constexpr int kDefaultHeightPx = 52;
 constexpr double kDefaultBgAlpha = 0.40;
@@ -59,6 +63,7 @@ struct Options {
   Unit unit = Unit::Cm;
   bool vertical = false;
   bool help = false;
+  bool show_version = false;
   // CLI overrides config when set
   bool cli_length = false;
   bool cli_height = false;
@@ -176,6 +181,7 @@ void print_usage(const char* prog) {
       "  -a, --alpha A       Background alpha 0.0-1.0 (default: %.2f)\n"
       "  -u, --unit UNIT     Display unit: cm|mm|in|px (default: cm)\n"
       "  -v, --vertical      Start in vertical orientation\n"
+      "  -V, --version       Print version and exit\n"
       "  -h, --help          Show this help\n"
       "\n"
       "Controls:\n"
@@ -213,6 +219,8 @@ Options parse_args(int argc, char** argv) {
     };
     if (!std::strcmp(a, "-h") || !std::strcmp(a, "--help")) {
       o.help = true;
+    } else if (!std::strcmp(a, "-V") || !std::strcmp(a, "--version")) {
+      o.show_version = true;
     } else if (!std::strcmp(a, "-l") || !std::strcmp(a, "--length")) {
       o.length_mm = std::atof(need("--length"));
       if (o.length_mm < 20) o.length_mm = 20;
@@ -625,6 +633,15 @@ void create_window(App& app) {
   app.atom_motif_hints = XInternAtom(app.dpy, "_MOTIF_WM_HINTS", False);
 
   XStoreName(app.dpy, app.win, "rulertoo");
+  {
+    XClassHint* ch = XAllocClassHint();
+    if (ch) {
+      ch->res_name = const_cast<char*>("rulertoo");
+      ch->res_class = const_cast<char*>("rulertoo");
+      XSetClassHint(app.dpy, app.win, ch);
+      XFree(ch);
+    }
+  }
   set_borderless(app);
 
   Atom type = XInternAtom(app.dpy, "_NET_WM_WINDOW_TYPE", False);
@@ -1410,6 +1427,10 @@ int main(int argc, char** argv) {
   app.opts = parse_args(argc, argv);
   if (app.opts.help) {
     print_usage(argv[0]);
+    return 0;
+  }
+  if (app.opts.show_version) {
+    std::printf("rulertoo %s\n", RULERTOO_VERSION);
     return 0;
   }
 

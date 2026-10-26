@@ -9,4 +9,5 @@ Terminal=false
 Categories=Utility;Accessibility;
 Keywords=ruler;measure;scale;mm;cm;inch;
 StartupNotify=false
+StartupWMClass=rulertoo
 # SPDX-License-Identifier: GPL-3.0-or-later
