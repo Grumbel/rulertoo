@@ -1,0 +1,150 @@
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.\" Copyright 2026 Ingo Ruhnke <grumbel@gmail.com>
+.TH RULERTOO 1 "October 2026" "rulertoo" "User Commands"
+.SH NAME
+rulertoo \- on-screen X11 ruler with real physical dimensions
+.SH SYNOPSIS
+.B rulertoo
+[\fIOPTION\fR]...
+.SH DESCRIPTION
+.B rulertoo
+is a borderless on-screen ruler for X11. It sizes itself using the
+physical millimetre dimensions reported by XRandR for the monitor the
+ruler sits on, rather than a single global DPI value.
+.PP
+The window is an override-redirect overlay: it stays above normal
+clients and is not constrained by the window manager when moved or
+resized (including over a desktop panel).
+.PP
+Marks follow classic metric spacing (1 mm / 5 mm / 10 mm). Segments of
+the window that hang onto another output, or into the gap between
+monitors, are left blank with only the outline drawn; the scale is
+valid on one monitor at a time.
+.SH OPTIONS
+.TP
+.BR \-l ", " \-\-length " " \fIMM\fR
+Initial physical length in millimetres (default: 300; range 20–2000).
+.TP
+.BR \-H ", " \-\-height " " \fIPX\fR
+Thickness of the ruler in pixels (default: 52; range 28–200).
+.TP
+.BR \-a ", " \-\-alpha " " \fIA\fR
+Background opacity from 0.0 to 1.0 for schemes that use transparency
+(default: 0.40). Fully opaque schemes ignore this for the panel fill.
+.TP
+.BR \-u ", " \-\-unit " " \fIUNIT\fR
+Numbering unit:
+.BR cm ,
+.BR mm ,
+.BR in ,
+or
+.BR px
+(default:
+.BR cm ).
+.TP
+.BR \-v ", " \-\-vertical
+Start in vertical orientation (default is horizontal).
+.TP
+.BR \-V ", " \-\-version
+Print the version string and exit.
+.TP
+.BR \-h ", " \-\-help
+Show a short help message and exit.
+.SH CONTROLS
+.TP
+Left-drag on the body
+Move the ruler.
+.TP
+Drag the free-end handle
+Resize the length (right edge when horizontal, bottom edge when
+vertical). Length is continuous so motion maps one-to-one to pixels.
+.TP
+Middle-drag
+Shift the numbering origin along the ruler.
+.TP
+.BR r " or the on-ruler " R " button"
+Rotate between horizontal and vertical. The centre is kept stable and
+the window is clamped onto the current monitor when it fits.
+.TP
+.B u
+Cycle units: cm → mm → in → px → cm.
+.TP
+.B c
+Cycle colour schemes: default → opaque → inverted → highcontrast →
+amber → default.
+.TP
+.B Shift-C
+Enter calibration mode for the current monitor (see
+.B CALIBRATION
+below).
+.TP
+Right-click outside the handle, or
+.BR Esc " / " q
+Quit. Settings are written to the config file on exit.
+.SH CALIBRATION
+When EDID or XRandR millimetre sizes are wrong, press
+.B Shift-C
+to calibrate against a real 30 cm reference:
+.IP \(bu 2
+A high-contrast banner appears on the ruler.
+.IP \(bu 2
+Resize the window until it matches a physical 30 cm object.
+.IP \(bu 2
+Press
+.B Enter
+to store a per-output scale factor, or
+.B Esc
+to cancel.
+.PP
+Factors are saved as
+.BI cal. OUTPUT = FACTOR
+in the config file and applied whenever that XRandR output is used
+(\fItrue_mm\fR = \fIedid_mm\fR × \fIfactor\fR).
+.SH COLOUR SCHEMES
+.TP
+.B default
+Semi-transparent cool grey panel with black marks (original look).
+.TP
+.B opaque
+Solid light panel, no see-through.
+.TP
+.B inverted
+Dark panel with light marks.
+.TP
+.B highcontrast
+Black panel with yellow marks.
+.TP
+.B amber
+Warm semi-transparent panel.
+.SH FILES
+.TP
+.I $XDG_CONFIG_HOME/rulertoo/config
+.TQ
+.I ~/.config/rulertoo/config
+Persisted state written on exit (and when a calibration is confirmed):
+window position, orientation, unit, length, thickness, alpha, colour
+scheme, and per-monitor calibration factors. Command-line options
+override the matching values for that run only.
+.SH ENVIRONMENT
+.TP
+.B DISPLAY
+X11 display to use.
+.TP
+.B XDG_CONFIG_HOME
+Base directory for the config file (default:
+.IR ~/.config ).
+.SH NOTES
+The scale follows the monitor under the ruler (via XRandR). Crossing
+onto another output blanks the overhang until the scale monitor
+updates. Override-redirect means the window is not listed like a
+normal application frame; click the ruler to raise it and give it
+keyboard focus.
+.SH SEE ALSO
+.BR xrandr (1),
+.BR X (7)
+.SH AUTHOR
+Ingo Ruhnke <grumbel@gmail.com>
+.SH COPYRIGHT
+Copyright \(co 2026 Ingo Ruhnke.
+License GPLv3+: GNU GPL version 3 or later
+<https://gnu.org/licenses/gpl.html>.

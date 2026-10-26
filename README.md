@@ -52,6 +52,10 @@ Installed packages also ship a `.desktop` entry, scalable icon, and
 AppStream metainfo so the ruler appears in application menus and software
 centres.
 
+## Manual
+
+After install, see **rulertoo**(1) (`man rulertoo`).
+
 ## Licence
 
 GPL-3.0-or-later

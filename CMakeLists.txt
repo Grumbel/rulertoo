@@ -62,3 +62,8 @@ install(FILES data/icons/hicolor/scalable/apps/rulertoo.svg
 install(FILES data/metainfo/org.grumbel.rulertoo.metainfo.xml
   DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo
 )
+
+install(FILES man/rulertoo.1
+  DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+)
+
