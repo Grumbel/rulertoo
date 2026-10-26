@@ -30,8 +30,22 @@ enum class Unit { Mm, Cm, Inch, Pixel };
 struct MonitorInfo {
   int x = 0, y = 0;
   int width_px = 0, height_px = 0;
-  int width_mm = 0, height_mm = 0;
+  int width_mm = 0, height_mm = 0;  // physical panel axes (native)
+  int rotation = 0;                  // RR_Rotate_* bitmask from CRTC
   std::string name;
+
+  // Physical millimetres along the *current* screen X / Y axes
+  // (accounts for 90/270° CRTC rotation).
+  int mm_along_x() const {
+    if (rotation & (RR_Rotate_90 | RR_Rotate_270))
+      return height_mm;
+    return width_mm;
+  }
+  int mm_along_y() const {
+    if (rotation & (RR_Rotate_90 | RR_Rotate_270))
+      return width_mm;
+    return height_mm;
+  }
 };
 
 struct Options {
@@ -187,6 +201,7 @@ std::vector<MonitorInfo> query_monitors(Display* dpy, Window root) {
     m.height_px = static_cast<int>(ci->height);
     m.width_mm = oi->mm_width > 0 ? static_cast<int>(oi->mm_width) : 0;
     m.height_mm = oi->mm_height > 0 ? static_cast<int>(oi->mm_height) : 0;
+    m.rotation = static_cast<int>(ci->rotation);
     m.name = oi->name ? oi->name : "unknown";
     if (m.width_mm > 0 && m.height_mm > 0 && m.width_px > 0)
       out.push_back(m);
@@ -229,12 +244,17 @@ const MonitorInfo* find_monitor_for_point(const std::vector<MonitorInfo>& mons,
 }
 
 double px_per_mm(const MonitorInfo& m, bool vertical) {
+  // CRTC width/height are already in the current orientation (and reflect
+  // xrandr --scale when the server reports the scaled mode size).
+  // Physical mm must follow the same axis after rotation.
   if (vertical) {
-    if (m.height_mm <= 0 || m.height_px <= 0) return 96.0 / 25.4;
-    return static_cast<double>(m.height_px) / static_cast<double>(m.height_mm);
+    int mm = m.mm_along_y();
+    if (mm <= 0 || m.height_px <= 0) return 96.0 / 25.4;
+    return static_cast<double>(m.height_px) / static_cast<double>(mm);
   }
-  if (m.width_mm <= 0 || m.width_px <= 0) return 96.0 / 25.4;
-  return static_cast<double>(m.width_px) / static_cast<double>(m.width_mm);
+  int mm = m.mm_along_x();
+  if (mm <= 0 || m.width_px <= 0) return 96.0 / 25.4;
+  return static_cast<double>(m.width_px) / static_cast<double>(mm);
 }
 
 void set_borderless(App& app) {
@@ -491,18 +511,31 @@ void draw_ruler(App& app) {
 
       int len = static_cast<int>(std::strlen(buf));
       int tw = XTextWidth(font, buf, len);
+      int tx, ty;
       if (vert) {
-        int tx = 2;
-        int ty = pos + 4;
-        XDrawString(app.dpy, app.win, app.gc, tx, ty, buf, len);
+        tx = 2;
+        ty = pos + (font->ascent / 2);
+        if (ty < font->ascent + 1) ty = font->ascent + 1;
+        if (ty > long_side - 2) ty = long_side - 2;
       } else {
-        int tx = pos - tw / 2;
+        tx = pos - tw / 2;
         if (tx < 2) tx = 2;
         if (tx + tw > long_side - 2) tx = long_side - 2 - tw;
-        int ty = edge - full_h - 2;
-        if (ty < 10) ty = 10;
-        XDrawString(app.dpy, app.win, app.gc, tx, ty, buf, len);
+        ty = edge - full_h - 2;
+        if (ty < font->ascent + 1) ty = font->ascent + 1;
       }
+      // High-contrast outline: white halo then black glyph so numbers stay
+      // readable on both light and dark / transparent backgrounds.
+      auto draw_outlined = [&](int x, int y) {
+        XSetForeground(app.dpy, app.gc, WhitePixel(app.dpy, app.screen));
+        for (int dy = -1; dy <= 1; ++dy)
+          for (int dx = -1; dx <= 1; ++dx)
+            if (dx || dy)
+              XDrawString(app.dpy, app.win, app.gc, x + dx, y + dy, buf, len);
+        XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
+        XDrawString(app.dpy, app.win, app.gc, x, y, buf, len);
+      };
+      draw_outlined(tx, ty);
     }
   }
 
@@ -524,16 +557,27 @@ void draw_ruler(App& app) {
     XDrawString(app.dpy, app.win, app.gc, rbx + 4, rby + 13, "R", 1);
   }
 
-  // Unit indicator bottom-right / end
+  // Unit indicator (outlined)
   if (font) {
     char ubuf[16];
     std::snprintf(ubuf, sizeof(ubuf), "%s", unit_name(app.opts.unit));
     int ulen = static_cast<int>(std::strlen(ubuf));
     int utw = XTextWidth(font, ubuf, ulen);
-    if (vert)
-      XDrawString(app.dpy, app.win, app.gc, 2, long_side - kHandlePx - 4, ubuf, ulen);
-    else
-      XDrawString(app.dpy, app.win, app.gc, long_side - utw - kHandlePx - 4, 12, ubuf, ulen);
+    int ux, uy;
+    if (vert) {
+      ux = 2;
+      uy = long_side - kHandlePx - 4;
+    } else {
+      ux = long_side - utw - kHandlePx - 4;
+      uy = font->ascent + 2;
+    }
+    XSetForeground(app.dpy, app.gc, WhitePixel(app.dpy, app.screen));
+    for (int dy = -1; dy <= 1; ++dy)
+      for (int dx = -1; dx <= 1; ++dx)
+        if (dx || dy)
+          XDrawString(app.dpy, app.win, app.gc, ux + dx, uy + dy, ubuf, ulen);
+    XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
+    XDrawString(app.dpy, app.win, app.gc, ux, uy, ubuf, ulen);
   }
 
   // Border
