@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`6eac5a7` — Blank off-monitor ruler segments
+`76939eb` — Live blanking on move; override-redirect vs panel
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -17,6 +17,7 @@
 - [x] Colour schemes on `c` (default / opaque / inverted / high-contrast / amber)
 - [x] Clamp position on rotate/place so vertical rulers are not cut off
 - [x] Blank off-monitor segments (outline only) when spanning outputs
+- [x] Live multi-monitor blanking while moving; override-redirect to stop WM/panel fight on resize
 
 ## Open
 - [ ] Full CRTC transform matrix
