@@ -458,23 +458,48 @@ void draw_ruler(App& app) {
   const int long_side = vert ? app.win_h : app.win_w;
   const int thick = vert ? app.win_w : app.win_h;
 
-  const int edge = thick - 2;
-  const int full_h = edge - 2;
-  const int mid_h = full_h * 2 / 3;
-  const int short_h = full_h / 3;
-
-  // Baseline
-  if (vert)
-    opaque_line(app, edge, 0, edge, long_side - 1);
-  else
-    opaque_line(app, 0, edge, long_side - 1, edge);
-
   XFontStruct* font = XLoadQueryFont(app.dpy, "fixed");
   if (!font) font = XLoadQueryFont(app.dpy, "6x13");
   if (font) XSetFont(app.dpy, app.gc, font->fid);
-  XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
 
-  // Marks from 0..length, shifted by origin_mm for labels
+  // Dual-side marks + centre label band with opaque backing for contrast.
+  const int band_h = std::max(14, font ? (font->ascent + font->descent + 4) : 16);
+  const int band_y0 = (thick - band_h) / 2;
+  // Tick lengths stop before the label band so both sides stay clear
+  const int margin = 1;
+  const int max_tick = std::max(4, band_y0 - margin);
+  const int full_h = max_tick;
+  const int mid_h = std::max(3, max_tick * 2 / 3);
+  const int short_h = std::max(2, max_tick / 3);
+
+  // Opaque centre band so numbers stay readable on any desktop background
+  if (vert) {
+    // vertical: band along X in the middle of thickness
+    if (app.has_argb && app.pict_format) {
+      XRenderColor band = {};
+      band.red = 0xffff; band.green = 0xf2f2; band.blue = 0xd0d0; band.alpha = 0xffff;
+      Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, band_y0, 0, band_h, long_side);
+      XRenderFreePicture(app.dpy, pict);
+    } else {
+      XSetForeground(app.dpy, app.gc, 0xfff2d0);
+      XFillRectangle(app.dpy, app.win, app.gc, band_y0, 0, band_h, long_side);
+    }
+  } else {
+    if (app.has_argb && app.pict_format) {
+      XRenderColor band = {};
+      band.red = 0xffff; band.green = 0xf2f2; band.blue = 0xd0d0; band.alpha = 0xffff;
+      Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, 0, band_y0, long_side, band_h);
+      XRenderFreePicture(app.dpy, pict);
+    } else {
+      XSetForeground(app.dpy, app.gc, 0xfff2d0);
+      XFillRectangle(app.dpy, app.win, app.gc, 0, band_y0, long_side, band_h);
+    }
+  }
+
+  if (font) XSetFont(app.dpy, app.gc, font->fid);
+
   for (int mm = 0; mm <= app.opts.length_mm; ++mm) {
     int pos = static_cast<int>(std::lround(mm * ppm));
     if (pos < 0 || pos >= long_side) continue;
@@ -483,12 +508,21 @@ void draw_ruler(App& app) {
     if (mm % 10 == 0) h = full_h;
     else if (mm % 5 == 0) h = mid_h;
 
-    if (vert)
-      opaque_line(app, edge - h, pos, edge, pos);
-    else
-      opaque_line(app, pos, edge - h, pos, edge);
+    // Marks on BOTH outer edges
+    if (vert) {
+      // left edge ticks
+      opaque_line(app, 0, pos, h, pos);
+      // right edge ticks
+      opaque_line(app, thick - 1 - h, pos, thick - 1, pos);
+    } else {
+      // top edge ticks
+      opaque_line(app, pos, 0, pos, h);
+      // bottom edge ticks
+      opaque_line(app, pos, thick - 1 - h, pos, thick - 1);
+    }
 
-    // Numbers at major steps, using origin
+    // Numbers at major steps — always show a label at each major tick;
+    // value is relative to origin_mm (do not skip when origin is off-grid).
     int step = major_step_mm(app);
     if (mm % step == 0 && font) {
       int rel = mm - app.origin_mm;
@@ -498,63 +532,58 @@ void draw_ruler(App& app) {
         std::snprintf(buf, sizeof(buf), "%.1f", val);
       else if (app.opts.unit == Unit::Pixel)
         std::snprintf(buf, sizeof(buf), "%.0f", val);
-      else if (app.opts.unit == Unit::Cm && (rel % 10 == 0))
+      else if (app.opts.unit == Unit::Cm)
         std::snprintf(buf, sizeof(buf), "%.0f", val);
-      else if (app.opts.unit == Unit::Mm)
-        std::snprintf(buf, sizeof(buf), "%d", rel);
       else
-        std::snprintf(buf, sizeof(buf), "%.0f", val);
-
-      // Skip empty / odd cm labels when unit is cm and not on full cm relative
-      if (app.opts.unit == Unit::Cm && (rel % 10 != 0) && (mm % 10 == 0))
-        continue;
+        std::snprintf(buf, sizeof(buf), "%d", rel);
 
       int len = static_cast<int>(std::strlen(buf));
       int tw = XTextWidth(font, buf, len);
       int tx, ty;
       if (vert) {
-        tx = 2;
-        ty = pos + (font->ascent / 2);
+        tx = band_y0 + std::max(1, (band_h - tw) / 2);
+        // For vertical, draw numbers rotated is hard with core X; keep upright
+        // and centre in the band.
+        ty = pos + font->ascent / 2;
         if (ty < font->ascent + 1) ty = font->ascent + 1;
         if (ty > long_side - 2) ty = long_side - 2;
+        // horizontal string in vertical band is cramped; still draw centred
+        tx = band_y0 + 2;
       } else {
         tx = pos - tw / 2;
         if (tx < 2) tx = 2;
         if (tx + tw > long_side - 2) tx = long_side - 2 - tw;
-        ty = edge - full_h - 2;
-        if (ty < font->ascent + 1) ty = font->ascent + 1;
+        ty = band_y0 + font->ascent + 1;
       }
-      // High-contrast outline: white halo then black glyph so numbers stay
-      // readable on both light and dark / transparent backgrounds.
-      auto draw_outlined = [&](int x, int y) {
-        XSetForeground(app.dpy, app.gc, WhitePixel(app.dpy, app.screen));
-        for (int dy = -1; dy <= 1; ++dy)
-          for (int dx = -1; dx <= 1; ++dx)
-            if (dx || dy)
-              XDrawString(app.dpy, app.win, app.gc, x + dx, y + dy, buf, len);
-        XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
-        XDrawString(app.dpy, app.win, app.gc, x, y, buf, len);
-      };
-      draw_outlined(tx, ty);
+      XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
+      XDrawString(app.dpy, app.win, app.gc, tx, ty, buf, len);
     }
   }
 
-  // Resize handle on the free end only (right / bottom)
+  // Resize handle on free end (right / bottom)
   if (vert)
     opaque_rect(app, 0, long_side - kHandlePx, thick, kHandlePx);
   else
     opaque_rect(app, long_side - kHandlePx, 0, kHandlePx, thick);
 
-  // Rotate button at the fixed origin corner
-  int rbx = 2;
-  int rby = 2;
+  // Rotate button at the free end, inset from the resize handle
+  int rbx, rby;
+  if (vert) {
+    rbx = 2;
+    rby = long_side - kHandlePx - kRotateBtn - 2;
+  } else {
+    rbx = long_side - kHandlePx - kRotateBtn - 2;
+    rby = 2;
+  }
+  if (rbx < 2) rbx = 2;
+  if (rby < 2) rby = 2;
   opaque_rect(app, rbx, rby, kRotateBtn, kRotateBtn);
-  // Simple "R" or cross for rotate
   if (font) {
-    XDrawString(app.dpy, app.win, app.gc, rbx + 4, rby + 13, "R", 1);
+    XSetForeground(app.dpy, app.gc, WhitePixel(app.dpy, app.screen));
+    XDrawString(app.dpy, app.win, app.gc, rbx + 5, rby + 13, "R", 1);
   }
 
-  // Unit indicator (outlined)
+  // Unit indicator near free end
   if (font) {
     char ubuf[16];
     std::snprintf(ubuf, sizeof(ubuf), "%s", unit_name(app.opts.unit));
@@ -562,17 +591,13 @@ void draw_ruler(App& app) {
     int utw = XTextWidth(font, ubuf, ulen);
     int ux, uy;
     if (vert) {
-      ux = 2;
-      uy = long_side - kHandlePx - 4;
+      ux = band_y0 + 2;
+      uy = long_side - kHandlePx - kRotateBtn - 16;
     } else {
-      ux = long_side - utw - kHandlePx - 4;
-      uy = font->ascent + 2;
+      ux = long_side - kHandlePx - kRotateBtn - utw - 6;
+      uy = band_y0 + font->ascent + 1;
     }
-    XSetForeground(app.dpy, app.gc, WhitePixel(app.dpy, app.screen));
-    for (int dy = -1; dy <= 1; ++dy)
-      for (int dx = -1; dx <= 1; ++dx)
-        if (dx || dy)
-          XDrawString(app.dpy, app.win, app.gc, ux + dx, uy + dy, ubuf, ulen);
+    if (ux < 2) ux = 2;
     XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
     XDrawString(app.dpy, app.win, app.gc, ux, uy, ubuf, ulen);
   }
@@ -627,8 +652,17 @@ App::DragMode hit_test(App& app, int x, int y) {
     if (x >= long_side - kHandlePx) return App::DragMode::ResizeRight;
   }
 
-  // Rotate button at origin corner
-  const int rbx = 2, rby = 2;
+  // Rotate button next to free-end handle
+  int rbx, rby;
+  if (vert) {
+    rbx = 2;
+    rby = long_side - kHandlePx - kRotateBtn - 2;
+  } else {
+    rbx = long_side - kHandlePx - kRotateBtn - 2;
+    rby = 2;
+  }
+  if (rbx < 2) rbx = 2;
+  if (rby < 2) rby = 2;
   if (x >= rbx && x < rbx + kRotateBtn && y >= rby && y < rby + kRotateBtn)
     return App::DragMode::RotateHint;
 
@@ -651,6 +685,10 @@ void handle_event(App& app, XEvent& ev) {
     case ButtonPress: {
       int bx = ev.xbutton.x;
       int by = ev.xbutton.y;
+      // Ignore scroll wheel (often reported as Button4/5); it was shifting
+      // origin / clearing labels when mis-handled as middle interactions.
+      if (ev.xbutton.button == Button4 || ev.xbutton.button == Button5)
+        break;
       if (ev.xbutton.button == Button1) {
         App::DragMode mode = hit_test(app, bx, by);
         if (mode == App::DragMode::RotateHint) {
