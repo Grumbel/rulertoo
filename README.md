@@ -30,10 +30,17 @@ from XRandR (not global DPI).
 | `Shift-C` | Calibrate (match real 30 cm, Enter saves) |
 | Right-click / Esc / `q` | Quit |
 
+## Version
+
+The top-level `VERSION` file is the single source of truth for CMake and Nix.
+
 ## Build
 
 ```bash
 nix build && ./result/bin/rulertoo
+nix run
+# develop loop:
+nix develop -c rulertoo-run
 # or
 cmake -B build -G Ninja && cmake --build build && ./build/rulertoo
 ```
