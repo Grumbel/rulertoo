@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<component type="desktop-application">
+  <id>org.grumbel.rulertoo</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>rulertoo</name>
+  <summary>On-screen ruler with real physical dimensions</summary>
+  <description>
+    <p>
+      Borderless on-screen ruler for X11 that uses real physical millimetre
+      sizes reported by XRandR (not a global DPI assumption). Place it on any
+      monitor and it scales correctly to that panel.
+    </p>
+    <p>
+      Features classic mm / 5 mm / cm marks, horizontal or vertical
+      orientation, free-end resize, unit cycling (cm, mm, inch, pixel), and
+      a shift of the numbering origin.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.grumbel.rulertoo.desktop</launchable>
+  <url type="homepage">https://github.com/Grumbel/rulertoo</url>
+  <developer_name>Ingo Ruhnke</developer_name>
+  <provides>
+    <binary>rulertoo</binary>
+  </provides>
+  <categories>
+    <category>Utility</category>
+    <category>Accessibility</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.2.1" date="2026-10-26"/>
+  </releases>
+</component>

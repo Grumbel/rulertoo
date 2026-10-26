@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=rulertoo
+GenericName=On-screen Ruler
+Comment=Borderless on-screen ruler with real physical dimensions from XRandR
+Exec=rulertoo
+Icon=rulertoo
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=ruler;measure;scale;mm;cm;inch;
+StartupNotify=false
+# SPDX-License-Identifier: GPL-3.0-or-later
