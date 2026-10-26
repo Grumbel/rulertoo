@@ -284,7 +284,6 @@ unsigned long color_chip_text(App& app) {
   return opaque_pixel(app, p.chip_text_r, p.chip_text_g, p.chip_text_b);
 }
 unsigned long color_white(App& app) { return opaque_pixel(app, 255, 255, 255); }
-unsigned long color_black(App& app) { return opaque_pixel(app, 0, 0, 0); }
 
 const char* unit_name(Unit u) {
   switch (u) {
@@ -891,26 +890,6 @@ void for_each_true_run(const std::vector<bool>& ok, Fn fn) {
   }
 }
 
-void fill_bg(App& app) {
-  Palette pal = current_palette(app);
-  if (app.has_argb && app.pict_format) {
-    XRenderColor color = {};
-    const double a01 = std::clamp(pal.bg_alpha, 0.0, 1.0);
-    unsigned short a = static_cast<unsigned short>(a01 * 0xffff);
-    color.alpha = a;
-    // Premultiply for PictOpSrc with partial alpha
-    color.red   = static_cast<unsigned short>(pal.bg_r * a01 * 0xff);
-    color.green = static_cast<unsigned short>(pal.bg_g * a01 * 0xff);
-    color.blue  = static_cast<unsigned short>(pal.bg_b * a01 * 0xff);
-    Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
-    XRenderFillRectangle(app.dpy, PictOpSrc, pict, &color, 0, 0, app.win_w, app.win_h);
-    XRenderFreePicture(app.dpy, pict);
-  } else {
-    XSetForeground(app.dpy, app.gc, opaque_pixel(app, pal.bg_r, pal.bg_g, pal.bg_b));
-    XFillRectangle(app.dpy, app.win, app.gc, 0, 0, app.win_w, app.win_h);
-  }
-}
-
 void mark_rect(App& app, int x, int y, int w, int h) {
   if (w <= 0 || h <= 0) return;
   Palette pal = current_palette(app);
@@ -927,10 +906,6 @@ void mark_rect(App& app, int x, int y, int w, int h) {
     XSetForeground(app.dpy, app.gc, color_mark(app));
     XFillRectangle(app.dpy, app.win, app.gc, x, y, w, h);
   }
-}
-
-void opaque_rect(App& app, int x, int y, int w, int h) {
-  mark_rect(app, x, y, w, h);
 }
 
 void opaque_line(App& app, int x1, int y1, int x2, int y2) {
