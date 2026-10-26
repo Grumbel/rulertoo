@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`c6c0521` — Man page rulertoo(1)
+`c28fe3d` — Calibration multi-length targets (Ctrl-C)
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -19,6 +19,7 @@
 - [x] Blank off-monitor segments (outline only) when spanning outputs
 - [x] Live multi-monitor blanking while moving; override-redirect vs panel
 - [x] Man page: man/rulertoo.1 installed to mandir/man1
+- [x] Calibration targets: Ctrl-C cycles 5/10/20/30 cm and 2/4/8/12 in
 
 ## Open
 - [ ] Full CRTC transform matrix
