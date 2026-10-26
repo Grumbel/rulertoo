@@ -283,13 +283,19 @@ void apply_geometry(App& app) {
   int long_px = static_cast<int>(std::lround(app.opts.length_mm * ppm));
   if (long_px < 60) long_px = 60;
 
+  int new_w, new_h;
   if (app.opts.vertical) {
-    app.win_w = app.opts.height_px;
-    app.win_h = long_px;
+    new_w = app.opts.height_px;
+    new_h = long_px;
   } else {
-    app.win_w = long_px;
-    app.win_h = app.opts.height_px;
+    new_w = long_px;
+    new_h = app.opts.height_px;
   }
+  // Avoid spurious ConfigureNotify / visual jumps when already at size.
+  if (new_w == app.win_w && new_h == app.win_h)
+    return;
+  app.win_w = new_w;
+  app.win_h = new_h;
   XResizeWindow(app.dpy, app.win, app.win_w, app.win_h);
 }
 
@@ -378,8 +384,12 @@ bool refresh_monitor(App& app, bool force) {
   bool changed = (m->name != app.current_monitor_name);
   app.current_monitor = m;
   app.current_monitor_name = m->name;
-  if (changed || force)
+  // Only re-derive pixel size when the monitor (and thus ppm) changes.
+  // Forcing a resize on every ButtonRelease was causing the ruler to jump
+  // after letting go of the free-end handle.
+  if (changed)
     apply_geometry(app);
+  (void)force;
   return changed;
 }
 
@@ -597,15 +607,16 @@ void draw_ruler(App& app) {
       int pad = 2;
       int tx, ty;
       if (vert) {
-        tx = band_y0 + 2;
-        ty = pos + font->ascent / 2;
+        // Centre the upright string in the thickness band and on the tick.
+        tx = band_y0 + std::max(0, (band_h - tw) / 2);
+        ty = pos + (font->ascent - font->descent) / 2;
         if (ty < font->ascent + 1) ty = font->ascent + 1;
-        if (ty > long_side - 2) ty = long_side - 2;
+        if (ty > long_side - font->descent - 1) ty = long_side - font->descent - 1;
       } else {
         tx = pos - tw / 2;
         if (tx < 2) tx = 2;
         if (tx + tw > long_side - 2) tx = long_side - 2 - tw;
-        ty = band_y0 + font->ascent + 1;
+        ty = band_y0 + font->ascent + (band_h - (font->ascent + font->descent)) / 2;
       }
       // Fully opaque chip behind every label (ARGB-safe via XRender).
       int cx = tx - pad;
@@ -781,6 +792,9 @@ void handle_event(App& app, XEvent& ev) {
     case ConfigureNotify:
       app.win_x = ev.xconfigure.x;
       app.win_y = ev.xconfigure.y;
+      // During our own resize we already set win_w/win_h; ignore transient WM sizes.
+      if (app.drag == App::DragMode::ResizeRight)
+        break;
       if (ev.xconfigure.width != app.win_w || ev.xconfigure.height != app.win_h)
         XResizeWindow(app.dpy, app.win, app.win_w, app.win_h);
       break;
@@ -830,8 +844,11 @@ void handle_event(App& app, XEvent& ev) {
 
     case ButtonRelease:
       if (ev.xbutton.button == Button1 || ev.xbutton.button == Button2) {
+        const bool was_resize = (app.drag == App::DragMode::ResizeRight);
         app.drag = App::DragMode::Idle;
-        refresh_monitor(app, true);
+        // Re-query monitor only after a move; never force a size change after resize.
+        if (!was_resize)
+          refresh_monitor(app, false);
         draw_ruler(app);
       }
       break;
@@ -861,15 +878,14 @@ void handle_event(App& app, XEvent& ev) {
             draw_ruler(app);
         } else if (app.drag == App::DragMode::ResizeRight) {
           if (!app.current_monitor) break;
-          // Root-space delta keeps physical scale fixed while the window
-          // width changes (window-local coords would drift and look like
-          // the unit scale is changing).
+          // Derive length from origin edge → pointer in root space so the
+          // result is independent of intermediate window sizes.
           double ppm = px_per_mm(*app.current_monitor, app.opts.vertical);
-          int delta_px = app.opts.vertical
-                             ? (my - app.drag_root_y)
-                             : (mx - app.drag_root_x);
-          int delta_mm = static_cast<int>(std::lround(delta_px / ppm));
-          int new_len = app.drag_start_length + delta_mm;
+          int origin_root = app.opts.vertical ? app.win_y : app.win_x;
+          int pointer = app.opts.vertical ? my : mx;
+          int long_px = pointer - origin_root;
+          if (long_px < 60) long_px = 60;
+          int new_len = static_cast<int>(std::lround(long_px / ppm));
           if (new_len < 30) new_len = 30;
           if (new_len > 2000) new_len = 2000;
           if (new_len != app.opts.length_mm) {
