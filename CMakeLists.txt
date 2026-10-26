@@ -1,30 +1,40 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.16)
-project(rulertoo VERSION 0.2.0 LANGUAGES CXX)
+project(rulertoo VERSION 0.2.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(GNUInstallDirs)
+
 find_package(X11 REQUIRED)
 find_package(PkgConfig REQUIRED)
+
+# libX11's pkg-config file Requires.private: xcb — ensure xcb is visible
+# when pkg-config resolves xrandr/xext/xrender (avoids noisy "Package xcb
+# was not found" during configure).
+pkg_check_modules(XCB xcb)
 pkg_check_modules(XRANDR REQUIRED xrandr)
-pkg_check_modules(XEXT REQUIRED xext)
 pkg_check_modules(XRENDER REQUIRED xrender)
 
 add_executable(rulertoo src/main.cpp)
 target_include_directories(rulertoo PRIVATE
   ${X11_INCLUDE_DIR}
   ${XRANDR_INCLUDE_DIRS}
-  ${XEXT_INCLUDE_DIRS}
   ${XRENDER_INCLUDE_DIRS}
+  ${XCB_INCLUDE_DIRS}
 )
 target_link_libraries(rulertoo PRIVATE
   ${X11_LIBRARIES}
   ${XRANDR_LIBRARIES}
-  ${XEXT_LIBRARIES}
   ${XRENDER_LIBRARIES}
 )
 target_compile_options(rulertoo PRIVATE -Wall -Wextra -Wpedantic)
 
-install(TARGETS rulertoo RUNTIME DESTINATION bin)
+install(TARGETS rulertoo
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(FILES README.md LICENSE
+  DESTINATION ${CMAKE_INSTALL_DOCDIR}
+)

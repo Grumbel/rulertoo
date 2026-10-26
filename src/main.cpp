@@ -6,7 +6,6 @@
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
 #include <X11/extensions/Xrandr.h>
-#include <X11/extensions/shape.h>
 #include <X11/extensions/Xrender.h>
 
 #include <algorithm>
@@ -571,22 +570,23 @@ int major_step_mm(App& app) {
 
 std::string format_length(const App& app) {
   const int mm = app.opts.length_mm;
+  const char* u = unit_name(app.opts.unit);
   char buf[48];
   switch (app.opts.unit) {
     case Unit::Mm:
-      std::snprintf(buf, sizeof(buf), "%d mm", mm);
+      std::snprintf(buf, sizeof(buf), "%d %s", mm, u);
       break;
     case Unit::Cm:
-      std::snprintf(buf, sizeof(buf), "%.1f cm", mm / 10.0);
+      std::snprintf(buf, sizeof(buf), "%.1f %s", mm / 10.0, u);
       break;
     case Unit::Inch:
-      std::snprintf(buf, sizeof(buf), "%.2f in", mm / 25.4);
+      std::snprintf(buf, sizeof(buf), "%.2f %s", mm / 25.4, u);
       break;
     case Unit::Pixel: {
       double ppm = app.current_monitor
                        ? px_per_mm(*app.current_monitor, app.opts.vertical)
                        : (96.0 / 25.4);
-      std::snprintf(buf, sizeof(buf), "%.0f px", mm * ppm);
+      std::snprintf(buf, sizeof(buf), "%.0f %s", mm * ppm, u);
       break;
     }
   }
@@ -654,7 +654,7 @@ void draw_ruler(App& app) {
       XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, band_y0, 0, band_h, long_side);
       XRenderFreePicture(app.dpy, pict);
     } else {
-      XSetForeground(app.dpy, app.gc, 0xfff2d0);
+      XSetForeground(app.dpy, app.gc, color_paper(app));
       XFillRectangle(app.dpy, app.win, app.gc, band_y0, 0, band_h, long_side);
     }
   } else {
@@ -665,7 +665,7 @@ void draw_ruler(App& app) {
       XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, 0, band_y0, long_side, band_h);
       XRenderFreePicture(app.dpy, pict);
     } else {
-      XSetForeground(app.dpy, app.gc, 0xfff2d0);
+      XSetForeground(app.dpy, app.gc, color_paper(app));
       XFillRectangle(app.dpy, app.win, app.gc, 0, band_y0, long_side, band_h);
     }
   }
@@ -748,7 +748,7 @@ void draw_ruler(App& app) {
         XRenderFillRectangle(app.dpy, PictOpSrc, pict, &chip, cx, cy, cw, ch);
         XRenderFreePicture(app.dpy, pict);
       } else {
-        XSetForeground(app.dpy, app.gc, 0xfff8e8);
+        XSetForeground(app.dpy, app.gc, color_paper(app));
         XFillRectangle(app.dpy, app.win, app.gc, cx, cy, cw, ch);
       }
       XSetForeground(app.dpy, app.gc, color_black(app));
@@ -855,7 +855,7 @@ void draw_ruler(App& app) {
       XRenderFreePicture(app.dpy, pict);
       XSetForeground(app.dpy, app.gc, color_white(app));
     } else {
-      XSetForeground(app.dpy, app.gc, 0x202020);
+      XSetForeground(app.dpy, app.gc, color_chip_bg(app));
       XFillRectangle(app.dpy, app.win, app.gc,
                      lx - pad, ly - font->ascent - pad,
                      ltw + 2 * pad, font->ascent + font->descent + 2 * pad);
@@ -1037,8 +1037,6 @@ void handle_event(App& app, XEvent& ev) {
       {
         int mx = ev.xmotion.x_root;
         int my = ev.xmotion.y_root;
-        int lx = ev.xmotion.x;
-        int ly = ev.xmotion.y;
 
         if (app.drag == App::DragMode::Move) {
           int nx = mx - app.drag_off_x;

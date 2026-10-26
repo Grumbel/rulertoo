@@ -14,21 +14,26 @@
       in {
         packages.default = pkgs.stdenv.mkDerivation {
           pname = "rulertoo";
-          version = "0.2.0";
+          version = "0.2.1";
           src = self;
 
           nativeBuildInputs = with pkgs; [ cmake pkg-config ];
+          # libxcb provides xcb.pc so pkg-config can resolve libX11's Requires
           buildInputs = with pkgs; [
             libx11
             libxrandr
-            libxext
             libxrender
+            libxcb
+            xorg.xorgproto
           ];
 
-          cmakeFlags = [ "-DCMAKE_BUILD_TYPE=Release" ];
+          cmakeFlags = [
+            "-DCMAKE_BUILD_TYPE=Release"
+          ];
 
           meta = with pkgs.lib; {
             description = "Borderless X11 ruler with real physical mm/cm via XRandR";
+            homepage = "https://github.com/";
             license = licenses.gpl3Plus;
             platforms = platforms.linux;
             mainProgram = "rulertoo";
@@ -47,8 +52,9 @@
             ninja
             libx11
             libxrandr
-            libxext
             libxrender
+            libxcb
+            xorg.xorgproto
           ];
         };
       });
