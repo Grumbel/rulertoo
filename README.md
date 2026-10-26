@@ -18,6 +18,8 @@ from XRandR (not global DPI).
 - Remembers position, orientation, unit, length, thickness, alpha and per-monitor calibration
 - Shift-C calibration against a real 30 cm reference when EDID sizes are wrong
 
+- Segments that hang onto another monitor are left blank (outline only); the scale is valid on one output
+
 ## Controls
 
 | Input | Action |
