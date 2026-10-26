@@ -1,0 +1,11 @@
+/build/
+/result
+/result-*
+*.o
+*.a
+*.so
+.cmake/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+.nix-*
