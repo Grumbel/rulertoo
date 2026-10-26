@@ -60,8 +60,8 @@ struct App {
   int win_w = 0, win_h = 0;
 
   // Interaction
-  enum class DragMode { None, Move, ResizeLeft, ResizeRight, Origin, RotateHint };
-  DragMode drag = DragMode::None;
+  enum class DragMode { Idle, Move, ResizeLeft, ResizeRight, Origin, RotateHint };
+  DragMode drag = DragMode::Idle;
   int drag_off_x = 0, drag_off_y = 0;
   int drag_start_length = 0;
   int drag_start_origin = 0;
@@ -647,14 +647,14 @@ void handle_event(App& app, XEvent& ev) {
 
     case ButtonRelease:
       if (ev.xbutton.button == Button1 || ev.xbutton.button == Button2) {
-        app.drag = App::DragMode::None;
+        app.drag = App::DragMode::Idle;
         refresh_monitor(app, true);
         draw_ruler(app);
       }
       break;
 
     case MotionNotify:
-      if (app.drag == App::DragMode::None) break;
+      if (app.drag == App::DragMode::Idle) break;
       // Coalesce
       while (XPending(app.dpy)) {
         XEvent peek;
