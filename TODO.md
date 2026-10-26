@@ -1,22 +1,22 @@
 # TODO — rulertoo
 
 ## Current tip
-`8d17bb4` — Exact integer scale; fix -0; end tick included
+`b29255e` — Build polish (warnings, xcb, install)
 
-Bundle: `/home/workdir/artifacts/rulertoo-015.1-exact-scale-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-016.1-build-polish-018568f.bundle`
 
 ## Done
-- [x] Integer mm↔px mapping, end tick on last pixel
-- [x] No "-0" labels
-- [x] High-contrast grip; locked-origin resize; ARGB text; etc.
+- [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
+- [x] Exact integer mm↔px; -0 labels fixed
+- [x] ARGB opaque text; high-contrast grip
+- [x] Build clean: no unused-var warnings; libxcb for pkg-config; install docs
 
 ## Open
 - [ ] Persist position/orientation/unit
+- [ ] Optional calibration when EDID mm is wrong
 - [ ] Full CRTC transform matrix
-- [ ] XShape-only mode
-- [ ] Optional manual calibration if EDID mm is wrong
+- [ ] XShape-only mode (re-add libXext when implemented)
 
 ## Notes
 - Base: `018568f`
 - Source: `/home/workdir/artifacts/rulertoo`
-- 7mm/30cm-class errors usually mean the monitor reports wrong mm in RandR
