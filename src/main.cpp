@@ -97,6 +97,41 @@ void die(const char* msg) {
   std::exit(1);
 }
 
+// On 32-bit ARGB visuals BlackPixel/WhitePixel are often fully transparent
+// (alpha=0), so core X text vanishes on light desktops. Build opaque pixels
+// from the visual's channel masks instead.
+unsigned long opaque_pixel(App& app, unsigned r8, unsigned g8, unsigned b8) {
+  if (!app.has_argb || !app.visual)
+    return (r8 << 16) | (g8 << 8) | b8;  // common TrueColor fallback
+  Visual* v = app.visual;
+  auto pack = [](unsigned long mask, unsigned val8) -> unsigned long {
+    if (!mask) return 0;
+    unsigned long bit = mask;
+    // shift val into mask bits
+    int shift = 0;
+    while ((bit & 1) == 0) { bit >>= 1; ++shift; }
+    // use top 8 bits of the mask field
+    int width = 0;
+    while (bit & 1) { bit >>= 1; ++width; }
+    if (width <= 0) return 0;
+    unsigned long v = val8;
+    if (width < 8) v >>= (8 - width);
+    else if (width > 8) v <<= (width - 8);
+    return (v << shift) & mask;
+  };
+  unsigned long p = pack(v->red_mask, r8) | pack(v->green_mask, g8) | pack(v->blue_mask, b8);
+  // alpha in top byte for typical ARGB
+  if (app.depth == 32)
+    p |= 0xff000000UL;
+  return p;
+}
+
+unsigned long color_black(App& app) { return opaque_pixel(app, 0, 0, 0); }
+unsigned long color_white(App& app) { return opaque_pixel(app, 255, 255, 255); }
+unsigned long color_paper(App& app) { return opaque_pixel(app, 255, 248, 232); }
+unsigned long color_chip_bg(App& app) { return opaque_pixel(app, 32, 32, 32); }
+
+
 const char* unit_name(Unit u) {
   switch (u) {
     case Unit::Mm: return "mm";
@@ -299,6 +334,39 @@ void apply_geometry(App& app) {
   XResizeWindow(app.dpy, app.win, app.win_w, app.win_h);
 }
 
+
+void place_on_pointer(App& app) {
+  Window root_ret, child;
+  int root_x = 0, root_y = 0, win_x = 0, win_y = 0;
+  unsigned mask = 0;
+  if (!XQueryPointer(app.dpy, app.root, &root_ret, &child,
+                     &root_x, &root_y, &win_x, &win_y, &mask)) {
+    root_x = 100;
+    root_y = 100;
+  }
+  app.monitors = query_monitors(app.dpy, app.root);
+  const MonitorInfo* m = find_monitor_for_point(app.monitors, root_x, root_y);
+  if (m) {
+    app.current_monitor = m;
+    app.current_monitor_name = m->name;
+  }
+  apply_geometry(app);
+  // Position near the pointer, clamped to the chosen monitor
+  int nx = root_x - app.win_w / 4;
+  int ny = root_y - app.win_h / 2;
+  if (m) {
+    if (nx < m->x + 8) nx = m->x + 8;
+    if (ny < m->y + 8) ny = m->y + 8;
+    if (nx + app.win_w > m->x + m->width_px - 8)
+      nx = m->x + m->width_px - app.win_w - 8;
+    if (ny + app.win_h > m->y + m->height_px - 8)
+      ny = m->y + m->height_px - app.win_h - 8;
+  }
+  app.win_x = nx;
+  app.win_y = ny;
+  XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
+}
+
 void create_window(App& app) {
   app.screen = DefaultScreen(app.dpy);
   app.root = RootWindow(app.dpy, app.screen);
@@ -418,7 +486,7 @@ void opaque_rect(App& app, int x, int y, int w, int h) {
     XRenderFillRectangle(app.dpy, PictOpSrc, pict, &black, x, y, w, h);
     XRenderFreePicture(app.dpy, pict);
   } else {
-    XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
+    XSetForeground(app.dpy, app.gc, color_black(app));
     XFillRectangle(app.dpy, app.win, app.gc, x, y, w, h);
   }
 }
@@ -429,7 +497,7 @@ void opaque_line(App& app, int x1, int y1, int x2, int y2) {
   else if (y1 == y2)
     opaque_rect(app, std::min(x1, x2), y1, std::abs(x2 - x1) + 1, 1);
   else {
-    XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
+    XSetForeground(app.dpy, app.gc, color_black(app));
     XDrawLine(app.dpy, app.win, app.gc, x1, y1, x2, y2);
   }
 }
@@ -634,7 +702,7 @@ void draw_ruler(App& app) {
         XSetForeground(app.dpy, app.gc, 0xfff8e8);
         XFillRectangle(app.dpy, app.win, app.gc, cx, cy, cw, ch);
       }
-      XSetForeground(app.dpy, app.gc, BlackPixel(app.dpy, app.screen));
+      XSetForeground(app.dpy, app.gc, color_black(app));
       XDrawString(app.dpy, app.win, app.gc, tx, ty, buf, len);
     }
   }
@@ -658,7 +726,7 @@ void draw_ruler(App& app) {
   if (rby < 2) rby = 2;
   opaque_rect(app, rbx, rby, kRotateBtn, kRotateBtn);
   if (font) {
-    XSetForeground(app.dpy, app.gc, WhitePixel(app.dpy, app.screen));
+    XSetForeground(app.dpy, app.gc, color_white(app));
     XDrawString(app.dpy, app.win, app.gc, rbx + 5, rby + 13, "R", 1);
   }
 
@@ -691,13 +759,13 @@ void draw_ruler(App& app) {
                            lx - pad, ly - font->ascent - pad,
                            ltw + 2 * pad, font->ascent + font->descent + 2 * pad);
       XRenderFreePicture(app.dpy, pict);
-      XSetForeground(app.dpy, app.gc, WhitePixel(app.dpy, app.screen));
+      XSetForeground(app.dpy, app.gc, color_white(app));
     } else {
       XSetForeground(app.dpy, app.gc, 0x202020);
       XFillRectangle(app.dpy, app.win, app.gc,
                      lx - pad, ly - font->ascent - pad,
                      ltw + 2 * pad, font->ascent + font->descent + 2 * pad);
-      XSetForeground(app.dpy, app.gc, WhitePixel(app.dpy, app.screen));
+      XSetForeground(app.dpy, app.gc, color_white(app));
     }
     XDrawString(app.dpy, app.win, app.gc, lx, ly, lbuf, llen);
   }
@@ -945,7 +1013,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "rulertoo: XRandR not available, using fallback sizes\n");
 
   create_window(app);
-  refresh_monitor(app, true);
+  place_on_pointer(app);
   draw_ruler(app);
 
   XEvent ev;
