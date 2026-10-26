@@ -1,24 +1,17 @@
 # TODO — rulertoo
 
 ## Current tip
-`42d5caf` — Readable labels + CRTC rotation-aware physical scale
+`8133ef9` — Drop left resize handle; free-end only
 
-Bundle: `/home/workdir/artifacts/rulertoo-005.1-contrast-rotation-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-006.1-single-resize-handle-018568f.bundle`
 
 ## Done
-- [x] XRandR physical sizing, per-monitor
-- [x] Classic ruler marks + numbers
-- [x] ARGB bg, opaque marks via XRender
-- [x] Drag to move; edge handles to resize
-- [x] Rotate (button + key + right-click on handle)
-- [x] Middle-drag numbering origin
-- [x] Units: cm / mm / in / px
-- [x] CLI options
-- [x] Flicker reduction
-- [x] Rename to rulertoo; libx11 package names
-- [x] Build fix: DragMode::None → Idle
-- [x] High-contrast outlined numbers/labels
-- [x] CRTC rotation: map physical mm to screen axes
+- [x] XRandR physical sizing + CRTC rotation-aware mm axes
+- [x] Classic marks; high-contrast outlined numbers
+- [x] ARGB bg, opaque marks
+- [x] Move, free-end resize, rotate, origin drag, units
+- [x] CLI options; flicker reduction; rename; None-macro fix
+- [x] Single resize handle (right/bottom only)
 
 ## Open
 - [ ] Live length readout while resizing
@@ -28,5 +21,5 @@ Bundle: `/home/workdir/artifacts/rulertoo-005.1-contrast-rotation-018568f.bundle
 - [ ] Fractional inch marks
 
 ## Notes
-- Base of work line: `018568f`
+- Base: `018568f`
 - Source: `/home/workdir/artifacts/rulertoo`
