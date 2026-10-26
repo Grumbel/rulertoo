@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`070ee60` — Desktop integration (.desktop, icon, AppStream)
+`77df349` — Desktop integration (.desktop, icon, AppStream)
 
 Bundle: `/home/workdir/artifacts/rulertoo-017.1-desktop-integration-9c013f1.bundle`
 
@@ -20,4 +20,4 @@ Bundle: `/home/workdir/artifacts/rulertoo-017.1-desktop-integration-9c013f1.bund
 
 ## Notes
 - Base for this work line: `9c013f1`
-- Bundle contains commits from base to tip (full stack for this sequence)
+- Bundle contains the full stack from that base
