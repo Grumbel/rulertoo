@@ -1,7 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`4550a1e` — gamepkgstd Linux desktop alignment
+`aa55928` — Colour schemes on `c` key
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -13,8 +13,8 @@
 - [x] Smooth free-end resize (continuous length_mm, 1 px steps)
 - [x] Per-monitor calibration (Shift-C, XDG config cal.<output>=factor)
 - [x] flake: xorgproto (drop deprecated xorg.xorgproto)
-- [x] gamepkgstd (Linux desktop): VERSION file, CMake/Nix version wire-up, --version,
-      WM_CLASS + StartupWMClass, nix develop helpers, packaging identity docs
+- [x] gamepkgstd (Linux desktop): VERSION, --version, WM_CLASS, develop helpers
+- [x] Colour schemes on `c` (default / opaque / inverted / high-contrast / amber)
 
 ## Open
 - [ ] Full CRTC transform matrix
@@ -22,5 +22,3 @@
 
 ## Notes
 - Base for this work line: `9c013f1`
-- Packaging reference: git@github.com:Grumbel/gamepkgstd.git (Linux desktop profile only;
-  Windows/Android/WASM/PortMaster/game UI are N/A for this X11 utility)
