@@ -821,6 +821,41 @@ bool refresh_monitor(App& app, bool force) {
   return changed;
 }
 
+// True for local positions along the long axis that lie on the scale
+// monitor (current_monitor). Segments that hang onto another output — or
+// into the gap between monitors — are not physically valid for this scale.
+std::vector<bool> scale_validity(const App& app, int long_side) {
+  std::vector<bool> ok(static_cast<size_t>(std::max(long_side, 0)), false);
+  if (long_side <= 0) return ok;
+  if (!app.current_monitor) {
+    std::fill(ok.begin(), ok.end(), true);
+    return ok;
+  }
+  const MonitorInfo& sm = *app.current_monitor;
+  const bool vert = app.opts.vertical;
+  for (int i = 0; i < long_side; ++i) {
+    const int rx = vert ? (app.win_x + app.win_w / 2) : (app.win_x + i);
+    const int ry = vert ? (app.win_y + i) : (app.win_y + app.win_h / 2);
+    if (rx >= sm.x && rx < sm.x + sm.width_px &&
+        ry >= sm.y && ry < sm.y + sm.height_px)
+      ok[static_cast<size_t>(i)] = true;
+  }
+  return ok;
+}
+
+// Invoke fn(start, end) for each contiguous true run in [0, n).
+template <typename Fn>
+void for_each_true_run(const std::vector<bool>& ok, Fn fn) {
+  const int n = static_cast<int>(ok.size());
+  int i = 0;
+  while (i < n) {
+    while (i < n && !ok[static_cast<size_t>(i)]) ++i;
+    const int start = i;
+    while (i < n && ok[static_cast<size_t>(i)]) ++i;
+    if (start < i) fn(start, i);
+  }
+}
+
 void fill_bg(App& app) {
   Palette pal = current_palette(app);
   if (app.has_argb && app.pict_format) {
@@ -957,11 +992,51 @@ bool length_chip_rect(App& app, XFontStruct* font, int* out_x, int* out_y, int* 
 
 void draw_ruler(App& app) {
   if (!app.current_monitor) return;
-  fill_bg(app);
 
   const bool vert = app.opts.vertical;
   const int long_side = vert ? app.win_h : app.win_w;
   const int thick = vert ? app.win_w : app.win_h;
+  const std::vector<bool> valid = scale_validity(app, long_side);
+
+  // Clear to fully transparent so off-monitor segments stay empty (outline only).
+  if (app.has_argb && app.pict_format) {
+    XRenderColor clear = {0, 0, 0, 0};
+    Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+    XRenderFillRectangle(app.dpy, PictOpSrc, pict, &clear, 0, 0, app.win_w, app.win_h);
+    XRenderFreePicture(app.dpy, pict);
+  } else {
+    // No real transparency: fill invalid with a dim stipple-like solid.
+    XSetForeground(app.dpy, app.gc, opaque_pixel(app, 40, 40, 40));
+    XFillRectangle(app.dpy, app.win, app.gc, 0, 0, app.win_w, app.win_h);
+  }
+
+  // Background only on the scale-monitor runs.
+  {
+    Palette pal = current_palette(app);
+    const double a01 = std::clamp(pal.bg_alpha, 0.0, 1.0);
+    for_each_true_run(valid, [&](int a, int b) {
+      if (app.has_argb && app.pict_format) {
+        XRenderColor color = {};
+        unsigned short aa = static_cast<unsigned short>(a01 * 0xffff);
+        color.alpha = aa;
+        color.red   = static_cast<unsigned short>(pal.bg_r * a01 * 0xff);
+        color.green = static_cast<unsigned short>(pal.bg_g * a01 * 0xff);
+        color.blue  = static_cast<unsigned short>(pal.bg_b * a01 * 0xff);
+        Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+        if (vert)
+          XRenderFillRectangle(app.dpy, PictOpSrc, pict, &color, 0, a, thick, b - a);
+        else
+          XRenderFillRectangle(app.dpy, PictOpSrc, pict, &color, a, 0, b - a, thick);
+        XRenderFreePicture(app.dpy, pict);
+      } else {
+        XSetForeground(app.dpy, app.gc, opaque_pixel(app, pal.bg_r, pal.bg_g, pal.bg_b));
+        if (vert)
+          XFillRectangle(app.dpy, app.win, app.gc, 0, a, thick, b - a);
+        else
+          XFillRectangle(app.dpy, app.win, app.gc, a, 0, b - a, thick);
+      }
+    });
+  }
 
   XFontStruct* font = XLoadQueryFont(app.dpy, "fixed");
   if (!font) font = XLoadQueryFont(app.dpy, "6x13");
@@ -977,9 +1052,8 @@ void draw_ruler(App& app) {
   const int mid_h = std::max(3, max_tick * 2 / 3);
   const int short_h = std::max(2, max_tick / 3);
 
-  // Opaque centre band so numbers stay readable on any desktop background
-  if (vert) {
-    // vertical: band along X in the middle of thickness
+  // Centre band only on valid (scale-monitor) runs.
+  for_each_true_run(valid, [&](int a, int b) {
     if (app.has_argb && app.pict_format) {
       Palette pal = current_palette(app);
       XRenderColor band = {};
@@ -988,28 +1062,19 @@ void draw_ruler(App& app) {
       band.blue = static_cast<unsigned short>(pal.paper_b * 0x101);
       band.alpha = 0xffff;
       Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
-      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, band_y0, 0, band_h, long_side);
+      if (vert)
+        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, band_y0, a, band_h, b - a);
+      else
+        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, a, band_y0, b - a, band_h);
       XRenderFreePicture(app.dpy, pict);
     } else {
       XSetForeground(app.dpy, app.gc, color_paper(app));
-      XFillRectangle(app.dpy, app.win, app.gc, band_y0, 0, band_h, long_side);
+      if (vert)
+        XFillRectangle(app.dpy, app.win, app.gc, band_y0, a, band_h, b - a);
+      else
+        XFillRectangle(app.dpy, app.win, app.gc, a, band_y0, b - a, band_h);
     }
-  } else {
-    if (app.has_argb && app.pict_format) {
-      Palette pal = current_palette(app);
-      XRenderColor band = {};
-      band.red = static_cast<unsigned short>(pal.paper_r * 0x101);
-      band.green = static_cast<unsigned short>(pal.paper_g * 0x101);
-      band.blue = static_cast<unsigned short>(pal.paper_b * 0x101);
-      band.alpha = 0xffff;
-      Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
-      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &band, 0, band_y0, long_side, band_h);
-      XRenderFreePicture(app.dpy, pict);
-    } else {
-      XSetForeground(app.dpy, app.gc, color_paper(app));
-      XFillRectangle(app.dpy, app.win, app.gc, 0, band_y0, long_side, band_h);
-    }
-  }
+  });
 
   if (font) XSetFont(app.dpy, app.gc, font->fid);
 
@@ -1020,6 +1085,7 @@ void draw_ruler(App& app) {
     if (mm == length_mm_i)
       pos = long_side - 1;
     if (pos < 0 || pos >= long_side) continue;
+    if (!valid[static_cast<size_t>(pos)]) continue;
 
     int h = short_h;
     if (mm % 10 == 0) h = full_h;
