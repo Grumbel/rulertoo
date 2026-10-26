@@ -1,15 +1,16 @@
 # TODO — rulertoo
 
 ## Current tip
-`23ea45f` — Click length chip to cycle units
+`8461c27` — Resize jump fix + vertical label centering
 
-Bundle: `/home/workdir/artifacts/rulertoo-010.1-click-units-018568f.bundle`
+Bundle: `/home/workdir/artifacts/rulertoo-011.1-resize-jump-018568f.bundle`
 
 ## Done
-- [x] Physical XRandR sizing + rotation-aware mm
-- [x] Dual-edge marks, opaque label chips, free-end controls
-- [x] Resize scale fixed (root deltas)
-- [x] Click length readout to cycle units (also key u)
+- [x] XRandR physical sizing + rotation-aware mm
+- [x] Dual-edge marks, opaque chips, free-end controls/info
+- [x] Click length to cycle units
+- [x] Stable free-end resize (no jump on release)
+- [x] Vertical label centering in band
 
 ## Open
 - [ ] Persist position/orientation/unit
