@@ -15,6 +15,7 @@ from XRandR (not global DPI).
 - Units: cm, mm, inch, pixel (cycle with `u`)
 - Semi-transparent background; marks drawn fully opaque
 - CLI options for length, height, alpha, unit, orientation
+- Remembers position, orientation, unit, length, thickness and alpha across runs
 
 ## Controls
 

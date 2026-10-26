@@ -1,9 +1,7 @@
 # TODO — rulertoo
 
 ## Current tip
-`77df349` — Desktop integration (.desktop, icon, AppStream)
-
-Bundle: `/home/workdir/artifacts/rulertoo-017.1-desktop-integration-9c013f1.bundle`
+(pending — persist config)
 
 ## Done
 - [x] Functional ruler (XRandR scale, dual marks, free-end resize, units, …)
@@ -11,13 +9,14 @@ Bundle: `/home/workdir/artifacts/rulertoo-017.1-desktop-integration-9c013f1.bund
 - [x] ARGB opaque text; high-contrast grip
 - [x] Build clean: no unused-var warnings; libxcb for pkg-config; install docs
 - [x] Desktop integration: .desktop, scalable SVG icon, AppStream metainfo, CMake install
+- [x] Persist position/orientation/unit/length/height/alpha via XDG config
 
 ## Open
-- [ ] Persist position/orientation/unit
 - [ ] Optional calibration when EDID mm is wrong
 - [ ] Full CRTC transform matrix
 - [ ] XShape-only mode (re-add libXext when implemented)
 
 ## Notes
 - Base for this work line: `9c013f1`
-- Bundle contains the full stack from that base
+- Previous tip (desktop): `80914d5`
+- Bundle under artifacts
