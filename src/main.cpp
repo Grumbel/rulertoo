@@ -621,16 +621,26 @@ void set_borderless(App& app) {
     long input_mode;
     unsigned long status;
   } hints = {};
-  hints.flags = 2;
+  hints.flags = 2;          // MWM_HINTS_DECORATIONS
   hints.decorations = 0;
   if (app.atom_motif_hints) {
     XChangeProperty(app.dpy, app.win, app.atom_motif_hints, app.atom_motif_hints,
                     32, PropModeReplace, reinterpret_cast<unsigned char*>(&hints), 5);
   }
-  if (app.atom_net_wm_state && app.atom_net_wm_state_above) {
+  // Stack above other clients and stay out of taskbar/pager when a WM does
+  // still look at these properties (harmless with override_redirect).
+  Atom state_atoms[3];
+  int nstate = 0;
+  if (app.atom_net_wm_state_above)
+    state_atoms[nstate++] = app.atom_net_wm_state_above;
+  Atom skip_taskbar = XInternAtom(app.dpy, "_NET_WM_STATE_SKIP_TASKBAR", False);
+  Atom skip_pager = XInternAtom(app.dpy, "_NET_WM_STATE_SKIP_PAGER", False);
+  if (skip_taskbar) state_atoms[nstate++] = skip_taskbar;
+  if (skip_pager) state_atoms[nstate++] = skip_pager;
+  if (app.atom_net_wm_state && nstate > 0) {
     XChangeProperty(app.dpy, app.win, app.atom_net_wm_state, XA_ATOM, 32,
                     PropModeReplace,
-                    reinterpret_cast<unsigned char*>(&app.atom_net_wm_state_above), 1);
+                    reinterpret_cast<unsigned char*>(state_atoms), nstate);
   }
 }
 
@@ -729,9 +739,14 @@ void create_window(App& app) {
   swa.colormap = app.colormap;
   swa.border_pixel = 0;
   swa.background_pixel = 0;
+  // override_redirect: do not let the WM (e.g. xfwm panel struts) constrain
+  // move/resize. The ruler is an overlay tool, not a normal managed window.
+  swa.override_redirect = True;
   swa.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask |
-                   PointerMotionMask | StructureNotifyMask | KeyPressMask;
-  unsigned long valuemask = CWColormap | CWBorderPixel | CWBackPixel | CWEventMask;
+                   PointerMotionMask | StructureNotifyMask | KeyPressMask |
+                   FocusChangeMask;
+  unsigned long valuemask = CWColormap | CWBorderPixel | CWBackPixel |
+                            CWEventMask | CWOverrideRedirect;
 
   app.monitors = query_monitors(app.dpy, app.root, app.cal_factors);
   app.current_monitor = app.monitors.empty() ? nullptr : &app.monitors[0];
@@ -793,6 +808,7 @@ void create_window(App& app) {
   }
 
   XMapWindow(app.dpy, app.win);
+  XRaiseWindow(app.dpy, app.win);
   XFlush(app.dpy);
 }
 
@@ -1535,6 +1551,9 @@ void handle_event(App& app, XEvent& ev) {
       // origin / clearing labels when mis-handled as middle interactions.
       if (ev.xbutton.button == Button4 || ev.xbutton.button == Button5)
         break;
+      // Overlay window: keep above the panel and accept keys while interacting.
+      XRaiseWindow(app.dpy, app.win);
+      XSetInputFocus(app.dpy, app.win, RevertToParent, CurrentTime);
       if (ev.xbutton.button == Button1) {
         App::DragMode mode = hit_test(app, bx, by);
         if (mode == App::DragMode::RotateHint) {
@@ -1604,8 +1623,10 @@ void handle_event(App& app, XEvent& ev) {
           app.win_x = nx;
           app.win_y = ny;
           XMoveWindow(app.dpy, app.win, nx, ny);
-          if (refresh_monitor(app, false))
-            draw_ruler(app);
+          // Update scale monitor when the centre crosses an output, and always
+          // redraw so off-monitor blanking tracks the live position.
+          refresh_monitor(app, false);
+          draw_ruler(app);
         } else if (app.drag == App::DragMode::ResizeRight) {
           if (!app.current_monitor) break;
           // Length from locked origin → pointer (root space). Origin is fixed
