@@ -3,6 +3,8 @@
 Borderless on-screen ruler for X11 that uses **real physical dimensions**
 from XRandR (not global DPI).
 
+![rulertoo screenshot](docs/screenshot.png)
+
 ## Features
 
 - Classic marks: mm / 5 mm / cm
