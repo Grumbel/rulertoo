@@ -16,6 +16,8 @@
 - [x] Calibration instructions in a popup beside the ruler (fits vertical)
 - [x] Vertical length chip rotated when too wide; no stale geometry after rotate
 - [x] Track XRandR layout changes; create missing config parent dirs
+- [x] Four-way rotation (rotation=0/90/180/270) around the pointer; F flips;
+      R/F buttons centred
 - [x] flake: xorgproto, libxau (drop deprecated xorg.* names)
 - [x] gamepkgstd (Linux desktop): VERSION, --version, WM_CLASS, develop helpers
 - [x] Colour schemes on `c` (default / opaque / inverted / high-contrast / amber)

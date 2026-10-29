@@ -43,7 +43,14 @@ or
 .BR cm ).
 .TP
 .BR \-v ", " \-\-vertical
-Start in vertical orientation (default is horizontal).
+Start in vertical orientation (default is horizontal); same as
+.BR "\-\-rotation 90" .
+.TP
+.BR \-\-rotation " " \fIDEG\fR
+Start rotated clockwise by
+.BR 0 ", " 90 ", " 180 " or " 270
+degrees. 0 numbers left to right, 90 top to bottom, 180 right to left,
+270 bottom to top. Labels always stay upright.
 .TP
 .BR \-V ", " \-\-version
 Print the version string and exit.
@@ -56,15 +63,26 @@ Left-drag on the body
 Move the ruler.
 .TP
 Drag the free-end handle
-Resize the length (right edge when horizontal, bottom edge when
-vertical). Length is continuous so motion maps one-to-one to pixels.
+Resize the length. The handle is at the end opposite the zero mark
+(right or bottom, left or top when rotated 180 or 270 degrees); the
+zero edge stays put. Length is continuous so motion maps one-to-one to
+pixels.
 .TP
 Middle-drag
 Shift the numbering origin along the ruler.
 .TP
-.BR r " or the on-ruler " R " button"
-Rotate between horizontal and vertical. The centre is kept stable and
-the window is clamped onto the current monitor when it fits.
+.BR r " or the " R " button (middle of the ruler)"
+Rotate 90 degrees clockwise: 0 → 90 → 180 → 270 → 0. The ruler turns
+around the clicked point, or for
+.B r
+around the pointer when it is over the ruler (otherwise the centre),
+so the spot under the pointer stays there. The window is then clamped
+onto the current monitor when it fits.
+Right-clicking the resize handle also rotates.
+.TP
+.BR f " or the " F " button"
+Flip the numbering direction in place (0 ↔ 180, 90 ↔ 270), again
+keeping the spot under the pointer.
 .TP
 .B u
 Cycle units: cm → mm → in → px → cm.

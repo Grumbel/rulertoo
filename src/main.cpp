@@ -29,7 +29,8 @@ constexpr int kDefaultLengthMm = 300;
 constexpr int kDefaultHeightPx = 52;
 constexpr double kDefaultBgAlpha = 0.40;
 constexpr int kHandlePx = 10;          // free-end (right/bottom) resize handle
-constexpr int kRotateBtn = 18;         // size of rotate button area
+constexpr int kButtonPx = 18;          // R (rotate) / F (flip) button size
+constexpr int kButtonGap = 4;          // space between the two buttons
 // Calibration reference lengths (metric then imperial). Ctrl-C cycles while
 // calibrating; Shift-C starts at the 30 cm entry.
 struct CalTarget {
@@ -106,6 +107,9 @@ struct Options {
   Unit unit = Unit::Cm;
   ColorScheme scheme = ColorScheme::Default;
   bool vertical = false;
+  // Numbers run against the screen axis (right-to-left / bottom-to-top):
+  // horizontal+reversed is 180°, vertical+reversed is 270°.
+  bool reversed = false;
   bool help = false;
   bool show_version = false;
   // CLI overrides config when set
@@ -131,13 +135,17 @@ struct App {
   XFontStruct* font = nullptr;  // loaded once in create_window
   int rr_event_base = -1;       // XRandR event base, -1 if unavailable
   Window cal_win = 0;           // calibration instructions popup
+  // Request serial of our latest move/resize; ConfigureNotify events from
+  // before it are stale echoes (see handle_event).
+  unsigned long last_config_serial = 0;
 
   Options opts;
   int win_x = 100, win_y = 100;
   int win_w = 0, win_h = 0;
 
   // Interaction
-  enum class DragMode { Idle, Move, ResizeRight, Origin, RotateHint, UnitChip };
+  // ResizeRight is the free end: right / bottom, or left / top when reversed.
+  enum class DragMode { Idle, Move, ResizeRight, Origin, RotateHint, FlipHint, UnitChip };
   DragMode drag = DragMode::Idle;
   int drag_off_x = 0, drag_off_y = 0;       // window-local grab offset (move)
   int drag_root_x = 0, drag_root_y = 0;     // root grab pos (origin drag)
@@ -327,7 +335,8 @@ void print_usage(const char* prog) {
       "  -H, --height PX     Thickness in pixels (default: %d)\n"
       "  -a, --alpha A       Background alpha 0.0-1.0 (default: %.2f)\n"
       "  -u, --unit UNIT     Display unit: cm|mm|in|px (default: cm)\n"
-      "  -v, --vertical      Start in vertical orientation\n"
+      "  -v, --vertical      Start in vertical orientation (same as --rotation 90)\n"
+      "      --rotation DEG  Start rotated 0, 90, 180 or 270 degrees\n"
       "  -V, --version       Print version and exit\n"
       "  -h, --help          Show this help\n"
       "\n"
@@ -335,10 +344,11 @@ void print_usage(const char* prog) {
       "  Left-drag           Move the ruler\n"
       "  Drag free end       Resize length (right/bottom handle)\n"
       "  Middle-drag         Shift numbering origin\n"
-      "  Right-click handle  Toggle orientation (or R button / key r)\n"
+      "  Right-click handle  Rotate 90 degrees clockwise (or R button / key r)\n"
       "  u                   Cycle units (cm -> mm -> in -> px)\n"
       "  c                   Cycle colour scheme (default/opaque/inverted/hc/amber)\n"
-      "  r                   Rotate horizontal/vertical\n"
+      "  r                   Rotate 90 degrees clockwise around the pointer\n"
+      "  f                   Flip direction (or F button)\n"
       "  Shift-C             Start calibration (30 cm; Ctrl-C cycles targets)\n"
       "  Esc / q             Quit\n"
       "\n"
@@ -354,6 +364,18 @@ void print_usage(const char* prog) {
       "2/4/8/12 in (useful on small panels that cannot fit 30 cm).\n"
       "\n",
       prog, kDefaultLengthMm, kDefaultHeightPx, kDefaultBgAlpha);
+}
+
+int orientation_deg(bool vertical, bool reversed) {
+  return vertical ? (reversed ? 270 : 90) : (reversed ? 180 : 0);
+}
+
+bool parse_rotation(const std::string& s, bool* vertical, bool* reversed) {
+  const int deg = std::atoi(s.c_str());
+  if (s.empty() || deg % 90 != 0 || deg < 0 || deg > 270) return false;
+  *vertical = (deg == 90 || deg == 270);
+  *reversed = (deg >= 180);
+  return true;
 }
 
 Options parse_args(int argc, char** argv) {
@@ -399,6 +421,14 @@ Options parse_args(int argc, char** argv) {
       o.cli_unit = true;
     } else if (!std::strcmp(a, "-v") || !std::strcmp(a, "--vertical")) {
       o.vertical = true;
+      o.reversed = false;
+      o.cli_vertical = true;
+    } else if (!std::strcmp(a, "--rotation")) {
+      const char* d = need("--rotation");
+      if (!parse_rotation(d, &o.vertical, &o.reversed)) {
+        std::fprintf(stderr, "rulertoo: rotation must be 0, 90, 180 or 270\n");
+        std::exit(2);
+      }
       o.cli_vertical = true;
     } else {
       std::fprintf(stderr, "rulertoo: unknown option: %s\n", a);
@@ -504,7 +534,10 @@ bool load_config(Options* opts, int* out_x, int* out_y,
       Unit u;
       if (parse_unit_string(val, &u)) opts->unit = u;
     } else if (key == "vertical" && !opts->cli_vertical) {
+      // Older configs; superseded by rotation=.
       opts->vertical = (val == "1" || val == "true" || val == "yes");
+    } else if (key == "rotation" && !opts->cli_vertical) {
+      parse_rotation(val, &opts->vertical, &opts->reversed);
     } else if ((key == "color" || key == "scheme") && !opts->cli_scheme) {
       ColorScheme s;
       if (parse_scheme_string(val, &s)) opts->scheme = s;
@@ -544,11 +577,11 @@ void save_config(const App& app) {
                "height_px=%d\n"
                "alpha=%.3f\n"
                "unit=%s\n"
-               "vertical=%d\n"
+               "rotation=%d\n"
                "color=%s\n",
                app.win_x, app.win_y,
                app.opts.length_mm, app.opts.height_px, app.opts.bg_alpha,
-               unit_name(app.opts.unit), app.opts.vertical ? 1 : 0,
+               unit_name(app.opts.unit), orientation_deg(app.opts.vertical, app.opts.reversed),
                scheme_name(app.opts.scheme));
   // One calibration entry (panel width,height factors) per XRandR output name
   for (const auto& kv : app.cal_factors) {
@@ -733,6 +766,12 @@ bool update_size(App& app) {
   }
   if (new_w == app.win_w && new_h == app.win_h)
     return false;
+  // Keep the origin edge fixed: on a reversed ruler that is the right /
+  // bottom edge, so it grows to the left / upward.
+  if (app.opts.reversed) {
+    if (app.opts.vertical) app.win_y += app.win_h - new_h;
+    else app.win_x += app.win_w - new_w;
+  }
   app.win_w = new_w;
   app.win_h = new_h;
   return true;
@@ -741,6 +780,7 @@ bool update_size(App& app) {
 // Push win_x / win_y / win_w / win_h to the server in one request, so no
 // intermediate geometry (new size at the old position) is ever visible.
 void commit_geometry(App& app) {
+  app.last_config_serial = NextRequest(app.dpy);
   XWindowChanges ch = {};
   ch.x = app.win_x;
   ch.y = app.win_y;
@@ -751,7 +791,7 @@ void commit_geometry(App& app) {
 
 void apply_geometry(App& app) {
   // Avoid spurious ConfigureNotify / visual jumps when already at size.
-  // Top-left stays pinned so the origin edge never jumps.
+  // The origin edge stays pinned so it never jumps.
   if (update_size(app))
     commit_geometry(app);
 }
@@ -1023,9 +1063,53 @@ std::string format_length(const App& app) {
   return buf;
 }
 
-// Geometry of the free-end length chip (window-local). In vertical mode the
-// text is drawn rotated (reading bottom-to-top) when it does not fit across
-// the ruler thickness. Returns false if no font.
+// The ruler's own frame: `a` runs along it from the origin (zero) edge to
+// the free end, `c` across it. Reversed rulers mirror `a` only, so text
+// stays upright while numbers run right-to-left / bottom-to-top.
+struct RulerFrame {
+  bool vert, rev;
+  int long_side, thick;
+  explicit RulerFrame(const App& app)
+      : vert(app.opts.vertical), rev(app.opts.reversed),
+        long_side(app.opts.vertical ? app.win_h : app.win_w),
+        thick(app.opts.vertical ? app.win_w : app.win_h) {}
+  // Window position along the long axis for ruler coordinate a (and back).
+  int win_along(int a) const { return rev ? long_side - 1 - a : a; }
+  int along(int x, int y) const { return win_along(vert ? y : x); }
+  // Window-local rectangle for the ruler span [a, a+al) x [c, c+cl).
+  void rect(int a, int al, int c, int cl, int* x, int* y, int* w, int* h) const {
+    const int wa = rev ? long_side - a - al : a;
+    if (vert) { *x = c; *y = wa; *w = cl; *h = al; }
+    else { *x = wa; *y = c; *w = al; *h = cl; }
+  }
+};
+
+// R (rotate) and F (flip) buttons, side by side in the middle of the ruler.
+void button_rects(const App& app, XRectangle* rot, XRectangle* flip) {
+  const RulerFrame f(app);
+  const int a0 = std::max(0, (f.long_side - 2 * kButtonPx - kButtonGap) / 2);
+  const int c0 = std::max(0, (f.thick - kButtonPx) / 2);
+  auto place = [&](XRectangle* r, int a) {
+    r->x = static_cast<short>(f.vert ? c0 : a);
+    r->y = static_cast<short>(f.vert ? a : c0);
+    r->width = r->height = kButtonPx;
+  };
+  place(rot, a0);
+  place(flip, a0 + kButtonPx + kButtonGap);
+}
+
+bool rect_contains(const XRectangle& r, int x, int y) {
+  return x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
+}
+
+bool rects_overlap(const XRectangle& r, int x, int y, int w, int h) {
+  return x < r.x + r.width && r.x < x + w && y < r.y + r.height && r.y < y + h;
+}
+
+// Geometry of the free-end length chip (window-local), next to the resize
+// handle. In vertical mode the text is drawn rotated (reading
+// bottom-to-top) when it does not fit across the ruler thickness. Returns
+// false if no font.
 struct ChipRect {
   int x = 0, y = 0, w = 0, h = 0;
   bool rotated = false;
@@ -1038,27 +1122,23 @@ bool length_chip_rect(const App& app, ChipRect* out) {
   const int ltw = XTextWidth(font, len_s.c_str(), static_cast<int>(len_s.size()));
   const int fh = font->ascent + font->descent;
   const int pad = 3;
-  const bool vert = app.opts.vertical;
-  const int long_side = vert ? app.win_h : app.win_w;
-  const int thick = vert ? app.win_w : app.win_h;
+  const RulerFrame f(app);
   const int band_h = std::max(14, fh + 4);
-  const int band_y0 = (thick - band_h) / 2;
+  const int band_y0 = (f.thick - band_h) / 2;
   ChipRect c;
-  if (vert) {
-    c.rotated = ltw + 2 * pad > thick - 4;
-    c.w = (c.rotated ? fh : ltw) + 2 * pad;
-    c.h = (c.rotated ? ltw : fh) + 2 * pad;
-    // Centred across the thickness, just above the R button.
-    c.x = std::max(1, (thick - c.w) / 2);
-    c.y = long_side - kHandlePx - kRotateBtn - 6 - c.h;
+  int along_len, cross_len, c0;
+  if (f.vert) {
+    c.rotated = ltw + 2 * pad > f.thick - 4;
+    cross_len = (c.rotated ? fh : ltw) + 2 * pad;
+    along_len = (c.rotated ? ltw : fh) + 2 * pad;
+    c0 = std::max(1, (f.thick - cross_len) / 2);
   } else {
-    c.w = ltw + 2 * pad;
-    c.h = fh + 2 * pad;
-    c.x = long_side - kHandlePx - kRotateBtn - ltw - 10 - pad;
-    c.y = band_y0 + 1 - pad;
+    along_len = ltw + 2 * pad;
+    cross_len = fh + 2 * pad;
+    c0 = std::max(1, band_y0 + 1 - pad);
   }
-  c.x = std::max(c.x, 1);
-  c.y = std::max(c.y, 1);
+  const int a = std::max(1, f.long_side - kHandlePx - 4 - along_len);
+  f.rect(a, along_len, c0, cross_len, &c.x, &c.y, &c.w, &c.h);
   *out = c;
   return true;
 }
@@ -1114,10 +1194,13 @@ void draw_cal_popup(App& app);
 void draw_ruler(App& app) {
   if (!app.current_monitor) return;
 
-  const bool vert = app.opts.vertical;
-  const int long_side = vert ? app.win_h : app.win_w;
-  const int thick = vert ? app.win_w : app.win_h;
+  const RulerFrame frame(app);
+  const bool vert = frame.vert;
+  const int long_side = frame.long_side;
+  const int thick = frame.thick;
   const std::vector<bool> valid = scale_validity(app, long_side);
+  XRectangle btn[2];
+  button_rects(app, &btn[0], &btn[1]);
 
   // Clear to fully transparent so off-monitor segments stay empty (outline only).
   if (app.has_argb && app.pict_format) {
@@ -1204,6 +1287,7 @@ void draw_ruler(App& app) {
     // Final tick sits on the last pixel of the content edge.
     if (mm == length_mm_i)
       pos = long_side - 1;
+    pos = frame.win_along(pos);  // ruler → window (mirrored when reversed)
     if (pos < 0 || pos >= long_side) continue;
     if (!valid[static_cast<size_t>(pos)]) continue;
 
@@ -1268,6 +1352,9 @@ void draw_ruler(App& app) {
       int cy = ty - font->ascent - pad;
       int cw = tw + 2 * pad;
       int ch = font->ascent + font->descent + 2 * pad;
+      // The R / F buttons sit in the middle of the label band.
+      if (rects_overlap(btn[0], cx, cy, cw, ch) || rects_overlap(btn[1], cx, cy, cw, ch))
+        continue;
       if (app.has_argb && app.pict_format) {
         Palette pal = current_palette(app);
         XRenderColor chip = {};
@@ -1287,88 +1374,64 @@ void draw_ruler(App& app) {
     }
   }
 
-  // Resize handle on free end — high-contrast grip (visible on light and dark).
-  {
-    int hx, hy, hw, hh;
-    if (vert) {
-      hx = 0; hy = long_side - kHandlePx; hw = thick; hh = kHandlePx;
-    } else {
-      hx = long_side - kHandlePx; hy = 0; hw = kHandlePx; hh = thick;
-    }
-    // Base fill: amber so it stands out on black and white desktops
+  // Solid fill of a ruler-frame rectangle.
+  auto fill = [&](int a, int al, int c, int cl, unsigned r8, unsigned g8, unsigned b8) {
+    int x, y, w, h;
+    frame.rect(a, al, c, cl, &x, &y, &w, &h);
+    if (w <= 0 || h <= 0) return;
     if (app.has_argb && app.pict_format) {
-      XRenderColor base = {};
-      base.red = 0xe0e0; base.green = 0x9090; base.blue = 0x2020; base.alpha = 0xffff;
+      XRenderColor col = {};
+      col.red = static_cast<unsigned short>(r8 * 0x101);
+      col.green = static_cast<unsigned short>(g8 * 0x101);
+      col.blue = static_cast<unsigned short>(b8 * 0x101);
+      col.alpha = 0xffff;
       Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
-      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &base, hx, hy, hw, hh);
-      // Light edge
-      XRenderColor hi = {};
-      hi.red = hi.green = hi.blue = 0xffff; hi.alpha = 0xffff;
-      if (vert)
-        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &hi, hx, hy, hw, 1);
-      else
-        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &hi, hx, hy, 1, hh);
-      // Dark edge
-      XRenderColor lo = {};
-      lo.red = lo.green = lo.blue = 0; lo.alpha = 0xffff;
-      if (vert)
-        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &lo, hx, hy + hh - 1, hw, 1);
-      else
-        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &lo, hx + hw - 1, hy, 1, hh);
-      // Grip ridges
-      XRenderColor ridge = {};
-      ridge.red = 0xffff; ridge.green = 0xd0d0; ridge.blue = 0x8080; ridge.alpha = 0xffff;
-      if (vert) {
-        for (int i = 2; i < hh - 1; i += 3)
-          XRenderFillRectangle(app.dpy, PictOpSrc, pict, &ridge, hx + 2, hy + i, hw - 4, 1);
-      } else {
-        for (int i = 2; i < hw - 1; i += 3)
-          XRenderFillRectangle(app.dpy, PictOpSrc, pict, &ridge, hx + i, hy + 2, 1, hh - 4);
-      }
+      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &col, x, y, w, h);
       XRenderFreePicture(app.dpy, pict);
     } else {
-      XSetForeground(app.dpy, app.gc, 0xe09020);
-      XFillRectangle(app.dpy, app.win, app.gc, hx, hy, hw, hh);
-      XSetForeground(app.dpy, app.gc, 0xffffff);
-      if (vert) XDrawLine(app.dpy, app.win, app.gc, hx, hy, hx + hw - 1, hy);
-      else XDrawLine(app.dpy, app.win, app.gc, hx, hy, hx, hy + hh - 1);
-      XSetForeground(app.dpy, app.gc, 0x000000);
-      if (vert) XDrawLine(app.dpy, app.win, app.gc, hx, hy + hh - 1, hx + hw - 1, hy + hh - 1);
-      else XDrawLine(app.dpy, app.win, app.gc, hx + hw - 1, hy, hx + hw - 1, hy + hh - 1);
+      XSetForeground(app.dpy, app.gc, opaque_pixel(app, r8, g8, b8));
+      XFillRectangle(app.dpy, app.win, app.gc, x, y, w, h);
     }
+  };
+
+  // Resize handle on free end — high-contrast grip (visible on light and dark):
+  // amber base so it stands out on black and white desktops, light inner
+  // edge, dark outer edge, grip ridges.
+  {
+    const int h0 = long_side - kHandlePx;
+    fill(h0, kHandlePx, 0, thick, 0xe0, 0x90, 0x20);
+    fill(h0, 1, 0, thick, 0xff, 0xff, 0xff);
+    fill(long_side - 1, 1, 0, thick, 0x00, 0x00, 0x00);
+    for (int i = 2; i < kHandlePx - 1; i += 3)
+      fill(h0 + i, 1, 2, thick - 4, 0xff, 0xd0, 0x80);
   }
 
-  // Rotate button at the free end, inset from the resize handle
-  int rbx, rby;
-  if (vert) {
-    rbx = 2;
-    rby = long_side - kHandlePx - kRotateBtn - 2;
-  } else {
-    rbx = long_side - kHandlePx - kRotateBtn - 2;
-    rby = 2;
-  }
-  if (rbx < 2) rbx = 2;
-  if (rby < 2) rby = 2;
-  // R button: mark fill with contrasting glyph
+  // R (rotate) and F (flip) buttons in the middle: chip fill, contrasting glyph.
   {
     Palette pal = current_palette(app);
-    if (app.has_argb && app.pict_format) {
-      XRenderColor c = {};
-      c.red = static_cast<unsigned short>(pal.chip_r * 0x101);
-      c.green = static_cast<unsigned short>(pal.chip_g * 0x101);
-      c.blue = static_cast<unsigned short>(pal.chip_b * 0x101);
-      c.alpha = 0xffff;
-      Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
-      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &c, rbx, rby, kRotateBtn, kRotateBtn);
-      XRenderFreePicture(app.dpy, pict);
-    } else {
-      XSetForeground(app.dpy, app.gc, color_chip_bg(app));
-      XFillRectangle(app.dpy, app.win, app.gc, rbx, rby, kRotateBtn, kRotateBtn);
+    const char* glyph[2] = {"R", "F"};
+    for (int i = 0; i < 2; ++i) {
+      const XRectangle& b = btn[i];
+      if (app.has_argb && app.pict_format) {
+        XRenderColor c = {};
+        c.red = static_cast<unsigned short>(pal.chip_r * 0x101);
+        c.green = static_cast<unsigned short>(pal.chip_g * 0x101);
+        c.blue = static_cast<unsigned short>(pal.chip_b * 0x101);
+        c.alpha = 0xffff;
+        Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+        XRenderFillRectangle(app.dpy, PictOpSrc, pict, &c, b.x, b.y, b.width, b.height);
+        XRenderFreePicture(app.dpy, pict);
+      } else {
+        XSetForeground(app.dpy, app.gc, color_chip_bg(app));
+        XFillRectangle(app.dpy, app.win, app.gc, b.x, b.y, b.width, b.height);
+      }
+      if (font) {
+        const int gw = XTextWidth(font, glyph[i], 1);
+        XSetForeground(app.dpy, app.gc, color_chip_text(app));
+        XDrawString(app.dpy, app.win, app.gc, b.x + (b.width - gw) / 2,
+                    b.y + (b.height + font->ascent - font->descent) / 2, glyph[i], 1);
+      }
     }
-  }
-  if (font) {
-    XSetForeground(app.dpy, app.gc, color_chip_text(app));
-    XDrawString(app.dpy, app.win, app.gc, rbx + 5, rby + 13, "R", 1);
   }
 
   // Unit is included in the free-end length chip (e.g. "30.0 cm"); no extra tag at origin.
@@ -1434,20 +1497,76 @@ void cycle_scheme(App& app) {
   draw_ruler(app);
 }
 
-void toggle_orient(App& app) {
+// Change orientation so the ruler point under the pivot (root coordinates)
+// stays under it, then pull the ruler onto the monitor (which can move it
+// off the pivot near screen edges; a cut-off ruler is worse).
+// `flip` mirrors the direction in place, keeping the across offset;
+// otherwise the across axis turns with the ruler like a real rotation.
+void set_orientation(App& app, bool vert, bool rev, int px, int py, bool flip) {
   // The calibrated axis follows the orientation, so keep it fixed meanwhile.
-  if (app.calibrating) return;
-  // Keep centre roughly stable, then pull fully on-screen. Without the
-  // clamp, a long vertical ruler near the bottom of the display is cut off.
-  int cx = app.win_x + app.win_w / 2;
-  int cy = app.win_y + app.win_h / 2;
-  app.opts.vertical = !app.opts.vertical;
+  if (app.calibrating || !app.current_monitor) return;
+  const MonitorInfo& m = *app.current_monitor;
+  const int thick = app.opts.height_px;
+  const int old_long = app.opts.vertical ? app.win_h : app.win_w;
+  const int lx = std::clamp(px - app.win_x, 0, app.win_w - 1);
+  const int ly = std::clamp(py - app.win_y, 0, app.win_h - 1);
+
+  // Pivot in ruler terms: u along from the origin, v across (turning with it).
+  int u = 0, v = 0;
+  switch (orientation_deg(app.opts.vertical, app.opts.reversed)) {
+    case 0:   u = lx;                v = ly;             break;
+    case 90:  u = ly;                v = thick - 1 - lx; break;
+    case 180: u = old_long - 1 - lx; v = thick - 1 - ly; break;
+    default:  u = old_long - 1 - ly; v = lx;             break;
+  }
+  // Physical distance, since the axes can have different px/mm.
+  const double u_mm = u / px_per_mm(m, app.opts.vertical);
+  if (flip) v = thick - 1 - v;
+
+  app.opts.vertical = vert;
+  app.opts.reversed = rev;
   update_size(app);
-  app.win_x = cx - app.win_w / 2;
-  app.win_y = cy - app.win_h / 2;
+  const int new_long = vert ? app.win_h : app.win_w;
+  u = std::clamp(static_cast<int>(std::lround(u_mm * px_per_mm(m, vert))), 0, new_long - 1);
+  int nx = 0, ny = 0;
+  switch (orientation_deg(vert, rev)) {
+    case 0:   nx = u;                ny = v;                break;
+    case 90:  nx = thick - 1 - v;    ny = u;                break;
+    case 180: nx = new_long - 1 - u; ny = thick - 1 - v;    break;
+    default:  nx = v;                ny = new_long - 1 - u; break;
+  }
+  app.win_x = px - nx;
+  app.win_y = py - ny;
   clamp_position_to_monitor(app);
   commit_geometry(app);
   draw_ruler(app);
+}
+
+// 0° → 90° → 180° → 270° → 0°, clockwise.
+void rotate_cw(App& app, int px, int py) {
+  const bool vert = !app.opts.vertical;
+  const bool rev = app.opts.vertical ? !app.opts.reversed : app.opts.reversed;
+  set_orientation(app, vert, rev, px, py, false);
+}
+
+void flip_direction(App& app, int px, int py) {
+  set_orientation(app, app.opts.vertical, !app.opts.reversed, px, py, true);
+}
+
+// Pivot for keyboard rotate / flip: the pointer when it is over the ruler,
+// otherwise the ruler's centre.
+void keyboard_pivot(App& app, int* px, int* py) {
+  *px = app.win_x + app.win_w / 2;
+  *py = app.win_y + app.win_h / 2;
+  Window root_ret, child;
+  int rx = 0, ry = 0, wx = 0, wy = 0;
+  unsigned mask = 0;
+  if (XQueryPointer(app.dpy, app.root, &root_ret, &child, &rx, &ry, &wx, &wy, &mask) &&
+      rx >= app.win_x && rx < app.win_x + app.win_w &&
+      ry >= app.win_y && ry < app.win_y + app.win_h) {
+    *px = rx;
+    *py = ry;
+  }
 }
 
 // Calibration instructions live in their own small window next to the
@@ -1635,29 +1754,16 @@ void quit(App& app) {
 }
 
 App::DragMode hit_test(App& app, int x, int y) {
-  const bool vert = app.opts.vertical;
-  const int long_side = vert ? app.win_h : app.win_w;
+  const RulerFrame frame(app);
 
-  // Resize handle on free end only (right / bottom)
-  if (vert) {
-    if (y >= long_side - kHandlePx) return App::DragMode::ResizeRight;
-  } else {
-    if (x >= long_side - kHandlePx) return App::DragMode::ResizeRight;
-  }
+  // Resize handle on the free end only
+  if (frame.along(x, y) >= frame.long_side - kHandlePx)
+    return App::DragMode::ResizeRight;
 
-  // Rotate button next to free-end handle
-  int rbx, rby;
-  if (vert) {
-    rbx = 2;
-    rby = long_side - kHandlePx - kRotateBtn - 2;
-  } else {
-    rbx = long_side - kHandlePx - kRotateBtn - 2;
-    rby = 2;
-  }
-  if (rbx < 2) rbx = 2;
-  if (rby < 2) rby = 2;
-  if (x >= rbx && x < rbx + kRotateBtn && y >= rby && y < rby + kRotateBtn)
-    return App::DragMode::RotateHint;
+  XRectangle rot, flip;
+  button_rects(app, &rot, &flip);
+  if (rect_contains(rot, x, y)) return App::DragMode::RotateHint;
+  if (rect_contains(flip, x, y)) return App::DragMode::FlipHint;
 
   // Length chip toggles units on click
   ChipRect c;
@@ -1678,13 +1784,30 @@ void handle_event(App& app, XEvent& ev) {
         draw_ruler(app);
       break;
 
-    case ConfigureNotify:
-      // The window is override-redirect, so the server only ever applies our
-      // own requests and app.win_* is authoritative. Do not copy the reported
-      // geometry back: during a resize+move sequence the events lag behind
-      // and a stale position made off-monitor blanking draw against the
-      // wrong place (e.g. a half-blank ruler right after rotating).
+    case ConfigureNotify: {
+      // app.win_* is authoritative for our own requests. Events generated
+      // before our latest request lag behind it: copying their geometry
+      // back made off-monitor blanking draw against a stale position (e.g.
+      // a half-blank ruler right after rotating). Newer ones are either the
+      // echo of that request or an external move (xdotool, a WM ignoring
+      // override-redirect), which we follow.
+      const XConfigureEvent& ce = ev.xconfigure;
+      if (ce.window != app.win || ce.serial < app.last_config_serial)
+        break;
+      if (app.drag == App::DragMode::ResizeRight)
+        break;
+      if (ce.width != app.win_w || ce.height != app.win_h) {
+        commit_geometry(app);  // keep the physical length
+        break;
+      }
+      if (ce.x != app.win_x || ce.y != app.win_y) {
+        app.win_x = ce.x;
+        app.win_y = ce.y;
+        refresh_monitor(app, true);
+        draw_ruler(app);
+      }
       break;
+    }
 
     case ButtonPress: {
       int bx = ev.xbutton.x;
@@ -1699,7 +1822,11 @@ void handle_event(App& app, XEvent& ev) {
       if (ev.xbutton.button == Button1) {
         App::DragMode mode = hit_test(app, bx, by);
         if (mode == App::DragMode::RotateHint) {
-          toggle_orient(app);
+          rotate_cw(app, ev.xbutton.x_root, ev.xbutton.y_root);
+          break;
+        }
+        if (mode == App::DragMode::FlipHint) {
+          flip_direction(app, ev.xbutton.x_root, ev.xbutton.y_root);
           break;
         }
         if (mode == App::DragMode::UnitChip) {
@@ -1715,7 +1842,11 @@ void handle_event(App& app, XEvent& ev) {
         // Lock origin edge in root space for the whole resize gesture.
         // Using live win_x/win_y during drag caused the left edge to jump
         // (ConfigureNotify feedback / WM gravity).
-        app.drag_origin_root = app.opts.vertical ? app.win_y : app.win_x;
+        // Reversed rulers have their origin at the right / bottom edge.
+        if (app.opts.vertical)
+          app.drag_origin_root = app.opts.reversed ? app.win_y + app.win_h : app.win_y;
+        else
+          app.drag_origin_root = app.opts.reversed ? app.win_x + app.win_w : app.win_x;
       } else if (ev.xbutton.button == Button2) {
         // Middle: drag origin
         app.drag = App::DragMode::Origin;
@@ -1728,7 +1859,7 @@ void handle_event(App& app, XEvent& ev) {
         // Right on handle area -> rotate, else quit
         App::DragMode mode = hit_test(app, bx, by);
         if (mode == App::DragMode::ResizeRight || mode == App::DragMode::RotateHint)
-          toggle_orient(app);
+          rotate_cw(app, ev.xbutton.x_root, ev.xbutton.y_root);
         else
           quit(app);
       }
@@ -1766,6 +1897,7 @@ void handle_event(App& app, XEvent& ev) {
           int ny = my - app.drag_off_y;
           app.win_x = nx;
           app.win_y = ny;
+          app.last_config_serial = NextRequest(app.dpy);
           XMoveWindow(app.dpy, app.win, nx, ny);
           // Update scale monitor when the centre crosses an output, and always
           // redraw so off-monitor blanking tracks the live position.
@@ -1776,7 +1908,8 @@ void handle_event(App& app, XEvent& ev) {
           // Length from locked origin → pointer (root space). Origin is fixed
           // for the gesture so the left/top edge cannot jump to 0.
           int pointer = app.opts.vertical ? my : mx;
-          int span_px = pointer - app.drag_origin_root;
+          int span_px = app.opts.reversed ? app.drag_origin_root - 1 - pointer
+                                          : pointer - app.drag_origin_root;
           if (span_px < 60) span_px = 60;
           // Continuous length: window span maps 1:1 to pixels (no mm quantisation).
           double ax_px = 0, ax_mm = 0;
@@ -1796,6 +1929,7 @@ void handle_event(App& app, XEvent& ev) {
           int delta_px = app.opts.vertical
                              ? (my - app.drag_root_y)
                              : (mx - app.drag_root_x);
+          if (app.opts.reversed) delta_px = -delta_px;
           int delta_mm = static_cast<int>(std::lround(delta_px / ppm));
           app.origin_mm = app.drag_start_origin + delta_mm;
           draw_ruler(app);
@@ -1820,8 +1954,14 @@ void handle_event(App& app, XEvent& ev) {
         quit(app);
       else if (ks == XK_u || ks == XK_U)
         cycle_unit(app);
-      else if (ks == XK_r || ks == XK_R)
-        toggle_orient(app);
+      else if (ks == XK_r || ks == XK_R || ks == XK_f || ks == XK_F) {
+        int px, py;
+        keyboard_pivot(app, &px, &py);
+        if (ks == XK_r || ks == XK_R)
+          rotate_cw(app, px, py);
+        else
+          flip_direction(app, px, py);
+      }
       else if ((ks == XK_c || ks == XK_C) && (st & ShiftMask))
         begin_calibration(app);
       else if (ks == XK_c || ks == XK_C)
