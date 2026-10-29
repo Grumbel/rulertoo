@@ -18,6 +18,7 @@
 - [x] Track XRandR layout changes; create missing config parent dirs
 - [x] Four-way rotation (rotation=0/90/180/270) around the pointer; F flips;
       R/F buttons centred
+- [x] Keyboard focus indicator (accent frame inside the outline)
 - [x] flake: xorgproto, libxau (drop deprecated xorg.* names)
 - [x] gamepkgstd (Linux desktop): VERSION, --version, WM_CLASS, develop helpers
 - [x] Colour schemes on `c` (default / opaque / inverted / high-contrast / amber)

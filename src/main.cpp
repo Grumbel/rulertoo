@@ -166,6 +166,7 @@ struct App {
   // object, then Enter stores the factor for the current monitor's axis
   // along the ruler (horizontal → screen X, vertical → screen Y).
   bool calibrating = false;
+  bool focused = false;  // has keyboard focus: drawn as an accent frame
   int cal_target_index = kCalDefaultIndex;
   double cal_saved_length_mm = 0;
   double cal_saved_factor = 1.0;
@@ -1466,7 +1467,31 @@ void draw_ruler(App& app) {
     }
   }
 
-  // Border
+  // Border. With keyboard focus an accent frame is added just inside it —
+  // there are no WM decorations to show focus. The outline itself (which
+  // carries the zero and final ticks) and the scale stay unchanged, so the
+  // ruler is equally readable unfocused (no dimming / transparency).
+  if (app.focused) {
+    constexpr int fw = 2;
+    const unsigned short iw = static_cast<unsigned short>(std::max(0, app.win_w - 2));
+    const unsigned short ih = static_cast<unsigned short>(std::max(0, app.win_h - 2));
+    const XRectangle edges[4] = {
+      {1, 1, iw, fw},
+      {1, static_cast<short>(app.win_h - 1 - fw), iw, fw},
+      {1, 1, fw, ih},
+      {static_cast<short>(app.win_w - 1 - fw), 1, fw, ih},
+    };
+    if (app.has_argb && app.pict_format) {
+      XRenderColor accent = {};
+      accent.red = 0x3030; accent.green = 0x9090; accent.blue = 0xffff; accent.alpha = 0xffff;
+      Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
+      XRenderFillRectangles(app.dpy, PictOpSrc, pict, &accent, edges, 4);
+      XRenderFreePicture(app.dpy, pict);
+    } else {
+      XSetForeground(app.dpy, app.gc, opaque_pixel(app, 0x30, 0x90, 0xff));
+      XFillRectangles(app.dpy, app.win, app.gc, const_cast<XRectangle*>(edges), 4);
+    }
+  }
   opaque_line(app, 0, 0, app.win_w - 1, 0);
   opaque_line(app, 0, app.win_h - 1, app.win_w - 1, app.win_h - 1);
   opaque_line(app, 0, 0, 0, app.win_h - 1);
@@ -1804,6 +1829,20 @@ void handle_event(App& app, XEvent& ev) {
         app.win_x = ce.x;
         app.win_y = ce.y;
         refresh_monitor(app, true);
+        draw_ruler(app);
+      }
+      break;
+    }
+
+    case FocusIn:
+    case FocusOut: {
+      // Temporary keyboard grabs (WM key bindings, alt-tab while held) do
+      // not really move focus; ignore them to avoid flicker.
+      if (ev.xfocus.mode == NotifyGrab || ev.xfocus.mode == NotifyUngrab)
+        break;
+      const bool f = (ev.type == FocusIn);
+      if (f != app.focused) {
+        app.focused = f;
         draw_ruler(app);
       }
       break;
