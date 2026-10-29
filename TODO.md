@@ -12,6 +12,7 @@
 - [x] Persist position/orientation/unit/length/height/alpha via XDG config
 - [x] Smooth free-end resize (continuous length_mm, 1 px steps)
 - [x] Per-monitor calibration (Shift-C; Ctrl-C cycles 5–30 cm / 2–12 in)
+- [x] Separate horizontal / vertical calibration (cal.OUTPUT=W,H)
 - [x] flake: xorgproto, libxau (drop deprecated xorg.* names)
 - [x] gamepkgstd (Linux desktop): VERSION, --version, WM_CLASS, develop helpers
 - [x] Colour schemes on `c` (default / opaque / inverted / high-contrast / amber)

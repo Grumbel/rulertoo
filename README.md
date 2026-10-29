@@ -17,6 +17,7 @@ from XRandR (not global DPI).
 - CLI options for length, height, alpha, unit, orientation
 - Remembers position, orientation, unit, length, thickness, alpha and per-monitor calibration
 - Shift-C calibration against a real 30 cm reference when EDID sizes are wrong
+  (horizontal and vertical axes calibrated separately)
 
 - Segments that hang onto another monitor are left blank (outline only); the scale is valid on one output
 
@@ -30,7 +31,7 @@ from XRandR (not global DPI).
 | Click **R** button or `r` | Rotate |
 | `u` | Cycle unit |
 | `c` | Cycle colour scheme |
-| `Shift-C` | Calibrate (match real 30 cm, Enter saves) |
+| `Shift-C` | Calibrate current axis (match real 30 cm, Enter saves) |
 | Right-click / Esc / `q` | Quit |
 
 ## Version

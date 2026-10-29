@@ -105,10 +105,18 @@ to store a per-output scale factor, or
 .B Esc
 to cancel.
 .PP
+Each axis is calibrated separately: a horizontal ruler calibrates the
+screen's horizontal axis, a vertical ruler the vertical one. Rotate with
+.B r
+and calibrate again to correct both.
+Rotation is disabled while calibrating.
+.PP
 Factors are saved as
-.BI cal. OUTPUT = FACTOR
-in the config file and applied whenever that XRandR output is used
+.BI cal. OUTPUT = W , H
+in the config file, one per native panel axis (EDID width and height),
+and applied whenever that XRandR output is used
 (\fItrue_mm\fR = \fIedid_mm\fR × \fIfactor\fR).
+A single value (older configs) applies to both axes.
 .SH COLOUR SCHEMES
 .TP
 .B default
