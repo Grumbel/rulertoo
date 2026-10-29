@@ -26,9 +26,11 @@ Per-monitor calibration (Shift-C) when EDID sizes are wrong.
 - GPLv3+
 - REUSE / SPDX
 - Author: Ingo Ruhnke <grumbel@gmail.com>
-- Co-authored-by: Grok <grok@x.ai> on agent commits
+- Co-authored-by: {ai model} on agent commits
 - Packaging norms: https://github.com/Grumbel/gamepkgstd (Linux desktop profile)
 
 ## Continuity
 - See TODO.md
-- Deliverables are git bundles only
+- Grok Web chat delivers changes as commits in a git bundle
+- Claude can commit directly into the local repository
+
