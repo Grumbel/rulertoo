@@ -1086,9 +1086,13 @@ struct RulerFrame {
 };
 
 // R (rotate) and F (flip) buttons, side by side in the middle of the ruler.
+// R sits exactly in the centre: a click on it rotates around its centre, and
+// a centred button maps onto itself in every orientation, so it lands back
+// under the pointer. F follows in window coordinates, which flipping (an
+// in-place change) leaves untouched.
 void button_rects(const App& app, XRectangle* rot, XRectangle* flip) {
   const RulerFrame f(app);
-  const int a0 = std::max(0, (f.long_side - 2 * kButtonPx - kButtonGap) / 2);
+  const int a0 = std::max(0, (f.long_side - kButtonPx) / 2);
   const int c0 = std::max(0, (f.thick - kButtonPx) / 2);
   auto place = [&](XRectangle* r, int a) {
     r->x = static_cast<short>(f.vert ? c0 : a);
@@ -1524,10 +1528,12 @@ void cycle_scheme(App& app) {
 
 // Change orientation so the ruler point under the pivot (root coordinates)
 // stays under it, then pull the ruler onto the monitor (which can move it
-// off the pivot near screen edges; a cut-off ruler is worse).
-// `flip` mirrors the direction in place, keeping the across offset;
-// otherwise the across axis turns with the ruler like a real rotation.
-void set_orientation(App& app, bool vert, bool rev, int px, int py, bool flip) {
+// off the pivot near screen edges; a cut-off ruler is worse). The across
+// axis turns with the ruler like a real rotation. With `on_button` the
+// pivot is the R button centre and the new window is placed so the R button
+// is centred on it exactly; the generic mm round trip drifts a pixel or two
+// per turn, which walked the button out from under a stationary pointer.
+void set_orientation(App& app, bool vert, bool rev, int px, int py, bool on_button) {
   // The calibrated axis follows the orientation, so keep it fixed meanwhile.
   if (app.calibrating || !app.current_monitor) return;
   const MonitorInfo& m = *app.current_monitor;
@@ -1546,11 +1552,20 @@ void set_orientation(App& app, bool vert, bool rev, int px, int py, bool flip) {
   }
   // Physical distance, since the axes can have different px/mm.
   const double u_mm = u / px_per_mm(m, app.opts.vertical);
-  if (flip) v = thick - 1 - v;
 
   app.opts.vertical = vert;
   app.opts.reversed = rev;
   update_size(app);
+  if (on_button) {
+    XRectangle rot, flip;
+    button_rects(app, &rot, &flip);
+    app.win_x = px - (rot.x + rot.width / 2);
+    app.win_y = py - (rot.y + rot.height / 2);
+    clamp_position_to_monitor(app);
+    commit_geometry(app);
+    draw_ruler(app);
+    return;
+  }
   const int new_long = vert ? app.win_h : app.win_w;
   u = std::clamp(static_cast<int>(std::lround(u_mm * px_per_mm(m, vert))), 0, new_long - 1);
   int nx = 0, ny = 0;
@@ -1568,19 +1583,24 @@ void set_orientation(App& app, bool vert, bool rev, int px, int py, bool flip) {
 }
 
 // 0° → 90° → 180° → 270° → 0°, clockwise.
-void rotate_cw(App& app, int px, int py) {
+void rotate_cw(App& app, int px, int py, bool on_button) {
   const bool vert = !app.opts.vertical;
   const bool rev = app.opts.vertical ? !app.opts.reversed : app.opts.reversed;
-  set_orientation(app, vert, rev, px, py, false);
+  set_orientation(app, vert, rev, px, py, on_button);
 }
 
-void flip_direction(App& app, int px, int py) {
-  set_orientation(app, app.opts.vertical, !app.opts.reversed, px, py, true);
+// Reverse the numbering direction in place. Same axis, same size, so the
+// window does not move at all; only the drawing changes. Allowed while
+// calibrating since the calibrated axis is unaffected.
+void flip_direction(App& app) {
+  app.opts.reversed = !app.opts.reversed;
+  draw_ruler(app);
 }
 
-// Pivot for keyboard rotate / flip: the pointer when it is over the ruler,
-// otherwise the ruler's centre.
-void keyboard_pivot(App& app, int* px, int* py) {
+// Pivot for keyboard rotation: the pointer when it is over the ruler,
+// otherwise the ruler's centre. Over the R button it behaves like a click
+// on it (returns true with the button centre as pivot).
+bool keyboard_pivot(App& app, int* px, int* py) {
   *px = app.win_x + app.win_w / 2;
   *py = app.win_y + app.win_h / 2;
   Window root_ret, child;
@@ -1589,9 +1609,17 @@ void keyboard_pivot(App& app, int* px, int* py) {
   if (XQueryPointer(app.dpy, app.root, &root_ret, &child, &rx, &ry, &wx, &wy, &mask) &&
       rx >= app.win_x && rx < app.win_x + app.win_w &&
       ry >= app.win_y && ry < app.win_y + app.win_h) {
+    XRectangle rot, flip;
+    button_rects(app, &rot, &flip);
+    if (rect_contains(rot, rx - app.win_x, ry - app.win_y)) {
+      *px = app.win_x + rot.x + rot.width / 2;
+      *py = app.win_y + rot.y + rot.height / 2;
+      return true;
+    }
     *px = rx;
     *py = ry;
   }
+  return false;
 }
 
 // Calibration instructions live in their own small window next to the
@@ -1861,11 +1889,16 @@ void handle_event(App& app, XEvent& ev) {
       if (ev.xbutton.button == Button1) {
         App::DragMode mode = hit_test(app, bx, by);
         if (mode == App::DragMode::RotateHint) {
-          rotate_cw(app, ev.xbutton.x_root, ev.xbutton.y_root);
+          // Pivot on the button centre rather than the exact click so the
+          // (centred) button ends up under the pointer again.
+          XRectangle rot, flip;
+          button_rects(app, &rot, &flip);
+          rotate_cw(app, app.win_x + rot.x + rot.width / 2, app.win_y + rot.y + rot.height / 2,
+                    true);
           break;
         }
         if (mode == App::DragMode::FlipHint) {
-          flip_direction(app, ev.xbutton.x_root, ev.xbutton.y_root);
+          flip_direction(app);
           break;
         }
         if (mode == App::DragMode::UnitChip) {
@@ -1898,7 +1931,7 @@ void handle_event(App& app, XEvent& ev) {
         // Right on handle area -> rotate, else quit
         App::DragMode mode = hit_test(app, bx, by);
         if (mode == App::DragMode::ResizeRight || mode == App::DragMode::RotateHint)
-          rotate_cw(app, ev.xbutton.x_root, ev.xbutton.y_root);
+          rotate_cw(app, ev.xbutton.x_root, ev.xbutton.y_root, false);
         else
           quit(app);
       }
@@ -1993,14 +2026,13 @@ void handle_event(App& app, XEvent& ev) {
         quit(app);
       else if (ks == XK_u || ks == XK_U)
         cycle_unit(app);
-      else if (ks == XK_r || ks == XK_R || ks == XK_f || ks == XK_F) {
+      else if (ks == XK_r || ks == XK_R) {
         int px, py;
-        keyboard_pivot(app, &px, &py);
-        if (ks == XK_r || ks == XK_R)
-          rotate_cw(app, px, py);
-        else
-          flip_direction(app, px, py);
+        const bool on_button = keyboard_pivot(app, &px, &py);
+        rotate_cw(app, px, py, on_button);
       }
+      else if (ks == XK_f || ks == XK_F)
+        flip_direction(app);
       else if ((ks == XK_c || ks == XK_C) && (st & ShiftMask))
         begin_calibration(app);
       else if (ks == XK_c || ks == XK_C)

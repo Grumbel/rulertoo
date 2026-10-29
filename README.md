@@ -29,7 +29,7 @@ from XRandR (not global DPI).
 | Drag free end | Resize length |
 | Middle-drag | Shift zero / numbering origin |
 | Click **R** button or `r` | Rotate 90° clockwise around the pointer (0/90/180/270) |
-| Click **F** button or `f` | Flip numbering direction |
+| Click **F** button or `f` | Flip numbering direction in place |
 | `u` | Cycle unit |
 | `c` | Cycle colour scheme |
 | `Shift-C` | Calibrate current axis (match real 30 cm, Enter saves) |
