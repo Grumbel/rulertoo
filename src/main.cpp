@@ -31,24 +31,36 @@ constexpr double kDefaultBgAlpha = 0.40;
 constexpr int kHandlePx = 10;          // free-end (right/bottom) resize handle
 constexpr int kButtonPx = 18;          // R (rotate) / F (flip) button size
 constexpr int kButtonGap = 4;          // space between the two buttons
-// Calibration reference lengths (metric then imperial). Ctrl-C cycles while
-// calibrating; Shift-C starts at the 30 cm entry.
+// Calibration reference lengths (metric then imperial). Left/Right (or
+// Shift-C again) cycle them while calibrating; Shift-C starts at 30 cm.
 struct CalTarget {
-  double mm;
-  const char* label;  // short banner text, e.g. "30 cm"
+  int value;
+  const char* unit;  // "cm" or "in", as written to the config
 };
 constexpr CalTarget kCalTargets[] = {
-  { 50.0,        "5 cm"  },
-  { 100.0,       "10 cm" },
-  { 200.0,       "20 cm" },
-  { 300.0,       "30 cm" },
-  { 2.0 * 25.4,  "2 in"  },
-  { 4.0 * 25.4,  "4 in"  },
-  { 8.0 * 25.4,  "8 in"  },
-  { 12.0 * 25.4, "12 in" },
+  { 5, "cm" }, { 10, "cm" }, { 20, "cm" }, { 30, "cm" },
+  { 2, "in" }, { 4, "in" },  { 8, "in" },  { 12, "in" },
 };
 constexpr int kCalTargetCount = static_cast<int>(sizeof(kCalTargets) / sizeof(kCalTargets[0]));
 constexpr int kCalDefaultIndex = 3;  // 30 cm
+
+// Millimetres per calibration reference unit; 0 if unknown.
+double ref_unit_mm(const std::string& unit) {
+  if (unit == "mm") return 1.0;
+  if (unit == "cm") return 10.0;
+  if (unit == "in") return 25.4;
+  return 0.0;
+}
+
+double cal_target_mm(int index) {
+  const CalTarget& t = kCalTargets[std::clamp(index, 0, kCalTargetCount - 1)];
+  return t.value * ref_unit_mm(t.unit);
+}
+
+std::string cal_target_label(int index) {
+  const CalTarget& t = kCalTargets[std::clamp(index, 0, kCalTargetCount - 1)];
+  return std::to_string(t.value) + " " + t.unit;
+}
 
 enum class Unit { Mm, Cm, Inch, Pixel };
 
@@ -61,11 +73,27 @@ enum class ColorScheme {
   Amber          // warm semi-transparent
 };
 
-// Per-output calibration multipliers on EDID millimetres, one per native
-// panel axis (EDID width / height), so CRTC rotation keeps them correct.
-struct CalFactors {
-  double w = 1.0;
-  double h = 1.0;
+// Calibration of one native panel axis: `px` pixels measured against a real
+// reference of `ref_len` `ref_unit` (e.g. 1134 px = 30 cm). Stored exactly
+// as measured, so nothing is lost to rounding a derived factor. Axes without
+// a measurement fall back to EDID millimetres times `factor` (1.0, or a
+// multiplier from an older config).
+struct AxisCal {
+  int px = 0;
+  int ref_len = 0;
+  std::string ref_unit;
+  double factor = 1.0;
+
+  double ref_mm() const { return ref_len * ref_unit_mm(ref_unit); }
+  bool measured() const { return px > 0 && ref_mm() > 0.0; }
+  bool is_default() const { return !measured() && std::fabs(factor - 1.0) < 1e-9; }
+};
+
+// Per-output calibration, one entry per native panel axis (EDID width /
+// height), so CRTC rotation keeps them correct.
+struct MonitorCal {
+  AxisCal w;
+  AxisCal h;
 };
 
 struct MonitorInfo {
@@ -74,30 +102,31 @@ struct MonitorInfo {
   int width_mm = 0, height_mm = 0;  // EDID / XRandR panel axes (native)
   int rotation = 0;                  // RR_Rotate_* bitmask from CRTC
   std::string name;
-  // Multipliers on EDID millimetres: true_mm = edid_mm * factor.
   // Set via Shift-C calibration against a real reference, per axis.
-  CalFactors cal;
+  MonitorCal cal;
 
   bool swapped() const { return (rotation & (RR_Rotate_90 | RR_Rotate_270)) != 0; }
 
-  // Calibration factor for the native axis lying along screen X / Y.
-  double& cal_along(bool screen_y) {
+  // Calibration of the native axis lying along screen X / Y.
+  AxisCal& cal_along(bool screen_y) {
     return (screen_y != swapped()) ? cal.h : cal.w;
   }
-  double cal_along(bool screen_y) const {
+  const AxisCal& cal_along(bool screen_y) const {
     return (screen_y != swapped()) ? cal.h : cal.w;
   }
 
   // Physical millimetres along the *current* screen X / Y axes
   // (accounts for 90/270° CRTC rotation and calibration).
-  double mm_along_x() const {
-    const int raw = swapped() ? height_mm : width_mm;
-    return std::max(1.0, static_cast<double>(raw) * cal_along(false));
+  double mm_along(bool screen_y) const {
+    const AxisCal& c = cal_along(screen_y);
+    const int px = screen_y ? height_px : width_px;
+    if (c.measured())
+      return std::max(1.0, c.ref_mm() * px / c.px);
+    const int raw = (screen_y != swapped()) ? height_mm : width_mm;
+    return std::max(1.0, static_cast<double>(raw) * c.factor);
   }
-  double mm_along_y() const {
-    const int raw = swapped() ? width_mm : height_mm;
-    return std::max(1.0, static_cast<double>(raw) * cal_along(true));
-  }
+  double mm_along_x() const { return mm_along(false); }
+  double mm_along_y() const { return mm_along(true); }
 };
 
 struct Options {
@@ -158,19 +187,22 @@ struct App {
   const MonitorInfo* current_monitor = nullptr;
   std::string current_monitor_name;
 
-  // Per-output calibration factors (true_mm = edid_mm * factor), keyed by
-  // XRandR output name. Applied whenever monitors are (re)queried.
-  std::map<std::string, CalFactors> cal_factors;
+  // Per-output calibration, keyed by XRandR output name. Applied whenever
+  // monitors are (re)queried.
+  std::map<std::string, MonitorCal> cal_factors;
 
-  // Shift-C calibration mode: user resizes the window to match a real 30 cm
-  // object, then Enter stores the factor for the current monitor's axis
-  // along the ruler (horizontal → screen X, vertical → screen Y).
+  // Shift-C calibration mode, two steps: the user resizes the ruler to match
+  // a real reference and presses Enter, which stores the pixel count for
+  // the axis along the ruler, then the ruler turns and the other axis
+  // follows. Afterwards the original orientation and length come back.
   bool calibrating = false;
   bool focused = false;  // has keyboard focus: drawn as an accent frame
+  int cal_step = 0;      // 0 = first axis, 1 = second axis
   int cal_target_index = kCalDefaultIndex;
   double cal_saved_length_mm = 0;
-  double cal_saved_factor = 1.0;
-  std::string cal_monitor_name;
+  bool cal_saved_vertical = false;
+  bool cal_saved_reversed = false;
+  int cal_saved_x = 0, cal_saved_y = 0;
 
   Atom atom_wm_delete = 0;
   Atom atom_net_wm_state = 0;
@@ -350,7 +382,7 @@ void print_usage(const char* prog) {
       "  c                   Cycle colour scheme (default/opaque/inverted/hc/amber)\n"
       "  r                   Rotate 90 degrees clockwise around the pointer\n"
       "  f                   Flip direction (or F button)\n"
-      "  Shift-C             Start calibration (30 cm; Ctrl-C cycles targets)\n"
+      "  Shift-C             Calibrate both axes against a real reference\n"
       "  Esc / q             Quit\n"
       "\n"
       "Position, orientation, unit, length, thickness, alpha and per-monitor\n"
@@ -358,10 +390,10 @@ void print_usage(const char* prog) {
       "(or ~/.config/rulertoo/config) on exit. Command-line options override\n"
       "the matching saved values for that run.\n"
       "\n"
-      "Calibration (Shift-C): resize until the ruler matches a real reference\n"
-      "length, then Enter to store the scale for the current monitor and axis\n"
-      "(horizontal or vertical; rotate and repeat for the other one) (Esc\n"
-      "cancels). While calibrating, Ctrl-C cycles targets: 5/10/20/30 cm and\n"
+      "Calibration (Shift-C) runs in two steps, one per screen axis: resize\n"
+      "until the ruler matches a real reference length and press Enter; the\n"
+      "ruler then turns for the other axis. Esc cancels the current step.\n"
+      "Left/Right (or Shift-C again) cycle the reference: 5/10/20/30 cm and\n"
       "2/4/8/12 in (useful on small panels that cannot fit 30 cm).\n"
       "\n",
       prog, kDefaultLengthMm, kDefaultHeightPx, kDefaultBgAlpha);
@@ -498,12 +530,45 @@ bool parse_unit_string(const std::string& s, Unit* out) {
   return false;
 }
 
+// Parse one axis calibration: "1134px=30cm" (measured) or a bare factor
+// such as "0.982" (older configs).
+bool parse_axis_cal(const std::string& s, AxisCal* out) {
+  AxisCal c;
+  int px = 0, len = 0, n = 0;
+  char unit[8] = {};
+  if (std::sscanf(s.c_str(), "%dpx=%d%7[a-z]%n", &px, &len, unit, &n) == 3 &&
+      n == static_cast<int>(s.size())) {
+    c.px = px;
+    c.ref_len = len;
+    c.ref_unit = unit;
+    if (!c.measured()) return false;
+  } else {
+    char* end = nullptr;
+    c.factor = std::strtod(s.c_str(), &end);
+    if (end == s.c_str() || *end != '\0') return false;
+    if (!(c.factor > 0.05 && c.factor < 20.0)) return false;
+  }
+  *out = c;
+  return true;
+}
+
+std::string format_axis_cal(const AxisCal& c) {
+  char buf[64];
+  if (c.measured())
+    std::snprintf(buf, sizeof(buf), "%dpx=%d%s", c.px, c.ref_len, c.ref_unit.c_str());
+  else
+    std::snprintf(buf, sizeof(buf), "%.6f", c.factor);
+  return buf;
+}
+
 // Load saved settings. CLI-set fields are left alone.
 // Returns true if a position was restored into *out_x / *out_y.
-// Calibration entries look like: cal.DP-1=0.982,1.013 (panel width,height).
-// A single value (older configs) applies to both axes.
+// Calibration entries look like: cal.DP-1.w=1134px=30cm (pixels counted
+// along the native panel width against a 30 cm reference; .h for height).
+// Older configs used factors, cal.DP-1=0.982,1.013 or a single value for
+// both axes; those are still read.
 bool load_config(Options* opts, int* out_x, int* out_y,
-                 std::map<std::string, CalFactors>* cal_out) {
+                 std::map<std::string, MonitorCal>* cal_out) {
   std::string path = config_file_path();
   if (path.empty()) return false;
   FILE* f = std::fopen(path.c_str(), "r");
@@ -544,13 +609,26 @@ bool load_config(Options* opts, int* out_x, int* out_y,
       if (parse_scheme_string(val, &s)) opts->scheme = s;
     } else if (cal_out && key.size() > 4 && key.compare(0, 4, "cal.") == 0) {
       std::string mon = key.substr(4);
-      CalFactors cf;
-      const size_t comma = val.find(',');
-      cf.w = std::atof(val.c_str());
-      cf.h = comma == std::string::npos ? cf.w : std::atof(val.c_str() + comma + 1);
-      auto ok = [](double v) { return v > 0.05 && v < 20.0; };
-      if (!mon.empty() && ok(cf.w) && ok(cf.h))
-        (*cal_out)[mon] = cf;
+      // Output names may contain dots, so only a trailing .w / .h counts.
+      const size_t n = mon.size();
+      if (n > 2 && mon[n - 2] == '.' && (mon[n - 1] == 'w' || mon[n - 1] == 'h')) {
+        AxisCal c;
+        if (parse_axis_cal(val, &c)) {
+          MonitorCal& mc = (*cal_out)[mon.substr(0, n - 2)];
+          (mon[n - 1] == 'w' ? mc.w : mc.h) = c;
+        }
+      } else if (!mon.empty()) {
+        const size_t comma = val.find(',');
+        AxisCal w, h;
+        if (parse_axis_cal(val.substr(0, comma), &w) &&
+            parse_axis_cal(comma == std::string::npos ? val.substr(0, comma)
+                                                      : val.substr(comma + 1), &h)) {
+          // Never let a legacy line override a measured axis.
+          MonitorCal& mc = (*cal_out)[mon];
+          if (!mc.w.measured()) mc.w = w;
+          if (!mc.h.measured()) mc.h = h;
+        }
+      }
     }
   }
   std::fclose(f);
@@ -569,6 +647,9 @@ void save_config(const App& app) {
   std::string tmp = path + ".tmp";
   FILE* f = std::fopen(tmp.c_str(), "w");
   if (!f) return;
+  // Mid-calibration the ruler is turned and sized for the reference; what
+  // should persist is the state calibration will return to.
+  const bool cal = app.calibrating;
   std::fprintf(f,
                "# rulertoo config — rewritten on exit\n"
                "version=1\n"
@@ -580,17 +661,19 @@ void save_config(const App& app) {
                "unit=%s\n"
                "rotation=%d\n"
                "color=%s\n",
-               app.win_x, app.win_y,
-               app.opts.length_mm, app.opts.height_px, app.opts.bg_alpha,
-               unit_name(app.opts.unit), orientation_deg(app.opts.vertical, app.opts.reversed),
+               cal ? app.cal_saved_x : app.win_x, cal ? app.cal_saved_y : app.win_y,
+               cal ? app.cal_saved_length_mm : app.opts.length_mm,
+               app.opts.height_px, app.opts.bg_alpha, unit_name(app.opts.unit),
+               cal ? orientation_deg(app.cal_saved_vertical, app.cal_saved_reversed)
+                   : orientation_deg(app.opts.vertical, app.opts.reversed),
                scheme_name(app.opts.scheme));
-  // One calibration entry (panel width,height factors) per XRandR output name
+  // One line per calibrated native panel axis per XRandR output name.
   for (const auto& kv : app.cal_factors) {
-    const CalFactors& cf = kv.second;
-    auto ok = [](double v) { return v > 0.05 && v < 20.0; };
-    if (ok(cf.w) && ok(cf.h) &&
-        (std::fabs(cf.w - 1.0) > 1e-6 || std::fabs(cf.h - 1.0) > 1e-6))
-      std::fprintf(f, "cal.%s=%.6f,%.6f\n", kv.first.c_str(), cf.w, cf.h);
+    const MonitorCal& mc = kv.second;
+    if (!mc.w.is_default())
+      std::fprintf(f, "cal.%s.w=%s\n", kv.first.c_str(), format_axis_cal(mc.w).c_str());
+    if (!mc.h.is_default())
+      std::fprintf(f, "cal.%s.h=%s\n", kv.first.c_str(), format_axis_cal(mc.h).c_str());
   }
   std::fclose(f);
   if (std::rename(tmp.c_str(), path.c_str()) != 0)
@@ -598,7 +681,7 @@ void save_config(const App& app) {
 }
 
 std::vector<MonitorInfo> query_monitors(Display* dpy, Window root,
-                                        const std::map<std::string, CalFactors>& cal) {
+                                        const std::map<std::string, MonitorCal>& cal) {
   std::vector<MonitorInfo> out;
   XRRScreenResources* res = XRRGetScreenResourcesCurrent(dpy, root);
   if (!res) return out;
@@ -1534,8 +1617,7 @@ void cycle_scheme(App& app) {
 // is centred on it exactly; the generic mm round trip drifts a pixel or two
 // per turn, which walked the button out from under a stationary pointer.
 void set_orientation(App& app, bool vert, bool rev, int px, int py, bool on_button) {
-  // The calibrated axis follows the orientation, so keep it fixed meanwhile.
-  if (app.calibrating || !app.current_monitor) return;
+  if (!app.current_monitor) return;
   const MonitorInfo& m = *app.current_monitor;
   const int thick = app.opts.height_px;
   const int old_long = app.opts.vertical ? app.win_h : app.win_w;
@@ -1584,6 +1666,8 @@ void set_orientation(App& app, bool vert, bool rev, int px, int py, bool on_butt
 
 // 0° → 90° → 180° → 270° → 0°, clockwise.
 void rotate_cw(App& app, int px, int py, bool on_button) {
+  // The calibrated axis follows the orientation, so keep it fixed meanwhile.
+  if (app.calibrating) return;
   const bool vert = !app.opts.vertical;
   const bool rev = app.opts.vertical ? !app.opts.reversed : app.opts.reversed;
   set_orientation(app, vert, rev, px, py, on_button);
@@ -1625,19 +1709,35 @@ bool keyboard_pivot(App& app, int* px, int* py) {
 // Calibration instructions live in their own small window next to the
 // ruler: a vertical ruler (or a short horizontal one) is far too narrow to
 // hold the text.
-void cal_popup_lines(const App& app, std::string lines[4]) {
-  const int ti = std::clamp(app.cal_target_index, 0, kCalTargetCount - 1);
-  lines[0] = "CALIBRATION";
-  lines[1] = std::string("Resize to real ") + kCalTargets[ti].label;
-  lines[2] = std::string(app.opts.vertical ? "Vertical" : "Horizontal") + " axis of " +
-             (app.current_monitor ? app.current_monitor->name : std::string("?"));
-  lines[3] = "Enter=save  Esc=cancel  Ctrl-C=next";
+constexpr int kCalPopupLines = 5;
+
+std::string axis_cal_summary(const AxisCal& c) {
+  if (c.measured())
+    return std::to_string(c.px) + " px = " + std::to_string(c.ref_len) + " " + c.ref_unit;
+  return c.is_default() ? "not calibrated" : "old factor";
+}
+
+void cal_popup_lines(const App& app, std::string lines[kCalPopupLines]) {
+  const bool vert = app.opts.vertical;
+  lines[0] = "CALIBRATION  step " + std::to_string(app.cal_step + 1) + " of 2: " +
+             (vert ? "vertical" : "horizontal") + " axis";
+  lines[1] = "Resize ruler to match a real " + cal_target_label(app.cal_target_index);
+  if (app.current_monitor) {
+    const MonitorInfo& m = *app.current_monitor;
+    lines[2] = m.name + "  H: " + axis_cal_summary(m.cal_along(false)) +
+               "  V: " + axis_cal_summary(m.cal_along(true));
+  } else {
+    lines[2] = "?";
+  }
+  lines[3] = app.cal_step == 0 ? "Enter=save, next axis  Esc=cancel"
+                               : "Enter=save, done  Esc=skip this axis";
+  lines[4] = "Left/Right or Shift-C: reference length";
 }
 
 void draw_cal_popup(App& app) {
   if (!app.cal_win || !app.font) return;
   XFontStruct* font = app.font;
-  std::string lines[4];
+  std::string lines[kCalPopupLines];
   cal_popup_lines(app, lines);
   const int pad = 6;
   const int lh = font->ascent + font->descent + 2;
@@ -1645,7 +1745,7 @@ void draw_cal_popup(App& app) {
   for (const auto& l : lines)
     w = std::max(w, XTextWidth(font, l.c_str(), static_cast<int>(l.size())));
   w += 2 * pad;
-  const int h = 4 * lh + 2 * pad;
+  const int h = kCalPopupLines * lh + 2 * pad;
 
   // Beside the ruler: below/above a horizontal one, right/left of a
   // vertical one, whichever side has room on the monitor.
@@ -1674,7 +1774,7 @@ void draw_cal_popup(App& app) {
   XFillRectangle(app.dpy, app.cal_win, app.gc, 0, 0, w, h);
   XSetForeground(app.dpy, app.gc, color_white(app));
   XSetFont(app.dpy, app.gc, font->fid);
-  for (int i = 0; i < 4; ++i)
+  for (int i = 0; i < kCalPopupLines; ++i)
     XDrawString(app.dpy, app.cal_win, app.gc, pad, pad + i * lh + font->ascent,
                 lines[i].c_str(), static_cast<int>(lines[i].size()));
 }
@@ -1705,100 +1805,106 @@ void begin_calibration(App& app) {
   if (!app.current_monitor) return;
   if (app.calibrating) return;
   app.calibrating = true;
+  app.cal_step = 0;
   app.cal_target_index = kCalDefaultIndex;  // 30 cm first
   app.cal_saved_length_mm = app.opts.length_mm;
-  app.cal_saved_factor = app.current_monitor->cal_along(app.opts.vertical);
-  app.cal_monitor_name = app.current_monitor->name;
+  app.cal_saved_vertical = app.opts.vertical;
+  app.cal_saved_reversed = app.opts.reversed;
+  app.cal_saved_x = app.win_x;
+  app.cal_saved_y = app.win_y;
   // Start near the target length so the user only fine-tunes; keep it on
   // the monitor so no part of the reference span is blanked.
-  app.opts.length_mm = kCalTargets[app.cal_target_index].mm;
+  app.opts.length_mm = cal_target_mm(app.cal_target_index);
   open_cal_popup(app);
   apply_geometry_clamped(app);
   draw_ruler(app);
 }
 
-void cycle_cal_target(App& app) {
+void cycle_cal_target(App& app, int delta) {
   if (!app.calibrating) return;
-  app.cal_target_index = (app.cal_target_index + 1) % kCalTargetCount;
-  app.opts.length_mm = kCalTargets[app.cal_target_index].mm;
+  app.cal_target_index = (app.cal_target_index + delta + kCalTargetCount) % kCalTargetCount;
+  app.opts.length_mm = cal_target_mm(app.cal_target_index);
   apply_geometry_clamped(app);
   draw_ruler(app);
 }
 
-void cancel_calibration(App& app) {
+// Leave calibration and put the ruler back as it was before Shift-C. The
+// length is kept in millimetres, so it reflects a new calibration.
+void end_calibration(App& app) {
   if (!app.calibrating) return;
   app.calibrating = false;
   close_cal_popup(app);
   app.opts.length_mm = app.cal_saved_length_mm;
-  // Restore factor on the live monitor entry if still the same output.
-  if (app.current_monitor && app.current_monitor->name == app.cal_monitor_name) {
-    // Mutate via the vector entry (current_monitor points into monitors).
-    for (auto& m : app.monitors) {
-      if (m.name == app.cal_monitor_name) {
-        m.cal_along(app.opts.vertical) = app.cal_saved_factor;
-        app.current_monitor = &m;
-        break;
-      }
-    }
+  app.opts.vertical = app.cal_saved_vertical;
+  app.opts.reversed = app.cal_saved_reversed;
+  app.win_x = app.cal_saved_x;
+  app.win_y = app.cal_saved_y;
+  refresh_monitor(app, true);
+  // update_size() shifts a reversed ruler relative to the calibration-time
+  // size; the saved corner is what should come back.
+  update_size(app);
+  app.win_x = app.cal_saved_x;
+  app.win_y = app.cal_saved_y;
+  clamp_position_to_monitor(app);
+  commit_geometry(app);
+  draw_ruler(app);
+}
+
+// Switch to the other axis, turning the ruler about its zero point so a
+// reference held against it only needs to swing round.
+void next_calibration_axis(App& app) {
+  int px, py;
+  const bool vert = app.opts.vertical, rev = app.opts.reversed;
+  if (vert) {
+    px = app.win_x + app.win_w / 2;
+    py = rev ? app.win_y + app.win_h - 1 : app.win_y;
+  } else {
+    px = rev ? app.win_x + app.win_w - 1 : app.win_x;
+    py = app.win_y + app.win_h / 2;
   }
-  apply_geometry(app);
+  app.cal_step = 1;
+  app.opts.length_mm = cal_target_mm(app.cal_target_index);
+  set_orientation(app, !vert, rev, px, py, false);
+  apply_geometry_clamped(app);
   draw_ruler(app);
 }
 
 void confirm_calibration(App& app) {
   if (!app.calibrating || !app.current_monitor) return;
-  // Pixel span currently on screen corresponds to the active cal target.
-  // EDID-based length for the same span (with factor=1) is:
-  //   edid_mm = last_tick * edid_axis_mm / axis_px
-  // factor = true_mm / edid_mm, stored for the native axis along the ruler.
-  const double target_mm = kCalTargets[std::clamp(app.cal_target_index, 0, kCalTargetCount - 1)].mm;
+  // The ruler's zero and end ticks are `last_tick` pixels apart, and that
+  // span is the active reference length. Store both exactly as measured for
+  // the native axis along the ruler.
   const bool vert = app.opts.vertical;
   const int span_px = vert ? app.win_h : app.win_w;
-  int last_tick = span_px - 1;
-  if (last_tick < 1) last_tick = 1;
-
-  // Raw EDID millimetres (ignore current factor).
-  const MonitorInfo& m = *app.current_monitor;
-  const int raw_mm = (vert != m.swapped()) ? m.height_mm : m.width_mm;
-  const int raw_px = vert ? m.height_px : m.width_px;
-  if (raw_mm <= 0 || raw_px <= 0) {
-    cancel_calibration(app);
-    return;
-  }
-  const double edid_mm = static_cast<double>(last_tick) * static_cast<double>(raw_mm)
-                         / static_cast<double>(raw_px);
-  if (edid_mm < 1.0) {
-    cancel_calibration(app);
-    return;
-  }
-  double factor = target_mm / edid_mm;
-  if (factor < 0.05) factor = 0.05;
-  if (factor > 20.0) factor = 20.0;
+  const int last_tick = std::max(1, span_px - 1);
+  const CalTarget& t = kCalTargets[std::clamp(app.cal_target_index, 0, kCalTargetCount - 1)];
 
   // The span was measured on the current monitor (the ruler may have been
-  // moved to another output since Shift-C), so store the factor there.
-  const std::string mon_name = m.name;
+  // moved to another output since Shift-C), so store it there.
+  const std::string mon_name = app.current_monitor->name;
   for (auto& mon : app.monitors) {
     if (mon.name == mon_name) {
-      mon.cal_along(vert) = factor;
+      AxisCal& c = mon.cal_along(vert);
+      c = AxisCal{};
+      c.px = last_tick;
+      c.ref_len = t.value;
+      c.ref_unit = t.unit;
       app.cal_factors[mon_name] = mon.cal;
       app.current_monitor = &mon;
       break;
     }
   }
-  app.calibrating = false;
-  close_cal_popup(app);
-  // Keep the window size; length now correctly reports the target.
-  app.opts.length_mm = target_mm;
-  apply_geometry(app);
-  draw_ruler(app);
+  if (app.cal_step == 0)
+    next_calibration_axis(app);
+  else
+    end_calibration(app);
   // Persist immediately so a crash does not lose the calibration.
   save_config(app);
 }
 
 void quit(App& app) {
   if (app.calibrating)
-    cancel_calibration(app);
+    end_calibration(app);
   save_config(app);
   XUnmapWindow(app.dpy, app.win);
   XDestroyWindow(app.dpy, app.win);
@@ -2013,12 +2119,17 @@ void handle_event(App& app, XEvent& ev) {
       KeySym ks = XLookupKeysym(&ev.xkey, 0);
       const unsigned st = ev.xkey.state;
       if (app.calibrating) {
+        // Esc drops the current step only; an axis already confirmed in
+        // step 1 stays saved.
         if (ks == XK_Escape)
-          cancel_calibration(app);
+          end_calibration(app);
         else if (ks == XK_Return || ks == XK_KP_Enter)
           confirm_calibration(app);
-        else if ((ks == XK_c || ks == XK_C) && (st & ControlMask))
-          cycle_cal_target(app);
+        else if (ks == XK_Right || ks == XK_KP_Right ||
+                 ((ks == XK_c || ks == XK_C) && (st & ShiftMask)))
+          cycle_cal_target(app, 1);
+        else if (ks == XK_Left || ks == XK_KP_Left)
+          cycle_cal_target(app, -1);
         // Ignore other keys while calibrating (q must not quit mid-cal).
         break;
       }

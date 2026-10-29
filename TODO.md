@@ -11,8 +11,10 @@
 - [x] Desktop integration: .desktop, scalable SVG icon, AppStream metainfo, CMake install
 - [x] Persist position/orientation/unit/length/height/alpha via XDG config
 - [x] Smooth free-end resize (continuous length_mm, 1 px steps)
-- [x] Per-monitor calibration (Shift-C; Ctrl-C cycles 5–30 cm / 2–12 in)
-- [x] Separate horizontal / vertical calibration (cal.OUTPUT=W,H)
+- [x] Per-monitor calibration (Shift-C; ←/→ or Shift-C cycle 5–30 cm / 2–12 in)
+- [x] Separate horizontal / vertical calibration, guided two-step run
+- [x] Calibration stored as measured pixels + reference (cal.OUTPUT.w=1134px=30cm);
+      legacy factor lines still read
 - [x] Calibration instructions in a popup beside the ruler (fits vertical)
 - [x] Vertical length chip rotated when too wide; no stale geometry after rotate
 - [x] Track XRandR layout changes; create missing config parent dirs

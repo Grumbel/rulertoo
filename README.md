@@ -16,8 +16,9 @@ from XRandR (not global DPI).
 - Semi-transparent background; marks drawn fully opaque
 - CLI options for length, height, alpha, unit, orientation
 - Remembers position, orientation, unit, length, thickness, alpha and per-monitor calibration
-- Shift-C calibration against a real 30 cm reference when EDID sizes are wrong
-  (horizontal and vertical axes calibrated separately)
+- Shift-C calibration against a real reference when EDID sizes are wrong,
+  stepping through the horizontal and vertical axes; saved as exact pixel
+  counts per reference (`cal.DP-1.w=1134px=30cm`)
 
 - Segments that hang onto another monitor are left blank (outline only); the scale is valid on one output
 
@@ -32,7 +33,7 @@ from XRandR (not global DPI).
 | Click **F** button or `f` | Flip numbering direction in place |
 | `u` | Cycle unit |
 | `c` | Cycle colour scheme |
-| `Shift-C` | Calibrate current axis (match real 30 cm, Enter saves) |
+| `Shift-C` | Calibrate both axes (match a real reference, ←/→ change it, Enter saves) |
 | Right-click / Esc / `q` | Quit |
 
 ## Version

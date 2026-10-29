@@ -96,12 +96,9 @@ Cycle colour schemes: default → opaque → inverted → highcontrast →
 amber → default.
 .TP
 .B Shift-C
-Start calibration (30 cm target; see
+Calibrate both screen axes (see
 .B CALIBRATION
 ).
-.TP
-.B Ctrl-C
-While calibrating, cycle the reference length (5/10/20/30 cm, 2/4/8/12 in).
 .TP
 Right-click outside the handle, or
 .BR Esc " / " q
@@ -109,37 +106,44 @@ Quit. Settings are written to the config file on exit.
 .SH CALIBRATION
 When EDID or XRandR millimetre sizes are wrong, press
 .B Shift-C
-to enter calibration mode (starts at a 30 cm target):
+to enter calibration mode. It runs in two steps, one per screen axis,
+starting with the ruler's current orientation:
 .IP \(bu 2
-A popup next to the ruler shows the active target length, the axis
-and the output being calibrated.
+A popup next to the ruler shows the step, the reference length, the
+output and what is already saved for its horizontal and vertical axes.
 .IP \(bu 2
 Resize the window until it matches a physical object of that length.
 .IP \(bu 2
 Press
-.B Ctrl-C
-to cycle targets:
+.BR Left / Right
+(or
+.B Shift-C
+again) to cycle the reference length:
 5 cm, 10 cm, 20 cm, 30 cm, then 2 in, 4 in, 8 in, 12 in
-(smaller lengths suit panels that cannot fit 30 cm).
+(smaller lengths suit panels that cannot fit 30 cm). Starts at 30 cm.
 .IP \(bu 2
 Press
 .B Enter
-to store a per-output scale factor, or
+to save the axis. After the first step the ruler turns about its zero
+point for the other axis; after the second the original orientation,
+position and length come back.
+.IP \(bu 2
 .B Esc
-to cancel.
+cancels the current step; an axis saved in the first step is kept.
 .PP
-Each axis is calibrated separately: a horizontal ruler calibrates the
-screen's horizontal axis, a vertical ruler the vertical one. Rotate with
-.B r
-and calibrate again to correct both.
 Rotation is disabled while calibrating.
 .PP
-Factors are saved as
-.BI cal. OUTPUT = W , H
-in the config file, one per native panel axis (EDID width and height),
-and applied whenever that XRandR output is used
-(\fItrue_mm\fR = \fIedid_mm\fR × \fIfactor\fR).
-A single value (older configs) applies to both axes.
+Each axis is saved as the exact pixel count measured and the reference
+it was measured against, one line per native panel axis (EDID width
+.BR w ,
+height
+.BR h ),
+for example
+.BR cal.DP-1.w=1134px=30cm .
+It is applied whenever that XRandR output is used. Older configs with
+scale factors
+.RB ( cal.DP-1=0.982,1.013 )
+are still read; an axis keeps its factor until it is recalibrated.
 .SH COLOUR SCHEMES
 .TP
 .B default
