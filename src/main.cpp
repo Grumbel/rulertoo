@@ -128,6 +128,9 @@ struct App {
   bool has_argb = false;
   GC gc = 0;
   XRenderPictFormat* pict_format = nullptr;
+  XFontStruct* font = nullptr;  // loaded once in create_window
+  int rr_event_base = -1;       // XRandR event base, -1 if unavailable
+  Window cal_win = 0;           // calibration instructions popup
 
   Options opts;
   int win_x = 100, win_y = 100;
@@ -330,14 +333,14 @@ void print_usage(const char* prog) {
       "\n"
       "Controls:\n"
       "  Left-drag           Move the ruler\n"
-      "  Drag free end         Resize length (right/bottom handle)\n"
-      "  Middle-drag        Shift numbering origin\n"
-      "  Right-click handle   Toggle orientation (or R button / key r)\n"
-      "  u                  Cycle units (cm -> mm -> in -> px)\n"
-      "  c                  Cycle colour scheme (default/opaque/inverted/hc/amber)\n"
-      "  r                  Rotate horizontal/vertical\n"
-      "  Shift-C            Start calibration (30 cm; Ctrl-C cycles targets)\n"
-      "  Esc / q            Quit\n"
+      "  Drag free end       Resize length (right/bottom handle)\n"
+      "  Middle-drag         Shift numbering origin\n"
+      "  Right-click handle  Toggle orientation (or R button / key r)\n"
+      "  u                   Cycle units (cm -> mm -> in -> px)\n"
+      "  c                   Cycle colour scheme (default/opaque/inverted/hc/amber)\n"
+      "  r                   Rotate horizontal/vertical\n"
+      "  Shift-C             Start calibration (30 cm; Ctrl-C cycles targets)\n"
+      "  Esc / q             Quit\n"
       "\n"
       "Position, orientation, unit, length, thickness, alpha and per-monitor\n"
       "calibration are saved to $XDG_CONFIG_HOME/rulertoo/config\n"
@@ -425,8 +428,14 @@ std::string config_file_path() {
 bool ensure_config_dir() {
   std::string dir = config_dir();
   if (dir.empty()) return false;
-  if (mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST)
-    return false;
+  // Create missing parents too (e.g. ~/.config on a fresh account), or
+  // settings and calibration would silently never be saved.
+  for (size_t pos = dir.find('/', 1); ; pos = dir.find('/', pos + 1)) {
+    const std::string part = dir.substr(0, pos);
+    if (mkdir(part.c_str(), 0755) != 0 && errno != EEXIST)
+      return false;
+    if (pos == std::string::npos) break;
+  }
   return true;
 }
 
@@ -707,8 +716,10 @@ void clamp_position_to_monitor(App& app) {
   if (app.win_y > max_y) app.win_y = max_y;
 }
 
-void apply_geometry(App& app) {
-  if (!app.current_monitor) return;
+// Recompute win_w / win_h from length and orientation (no X request).
+// Returns true if the size changed.
+bool update_size(App& app) {
+  if (!app.current_monitor) return false;
   int long_px = length_to_win_px(*app.current_monitor, app.opts.vertical, app.opts.length_mm);
   if (long_px < 60) long_px = 60;
 
@@ -720,13 +731,16 @@ void apply_geometry(App& app) {
     new_w = long_px;
     new_h = app.opts.height_px;
   }
-  // Avoid spurious ConfigureNotify / visual jumps when already at size.
   if (new_w == app.win_w && new_h == app.win_h)
-    return;
+    return false;
   app.win_w = new_w;
   app.win_h = new_h;
-  // Pin top-left (or top for vertical growth downward) so the origin edge
-  // never jumps when the WM interprets a bare resize.
+  return true;
+}
+
+// Push win_x / win_y / win_w / win_h to the server in one request, so no
+// intermediate geometry (new size at the old position) is ever visible.
+void commit_geometry(App& app) {
   XWindowChanges ch = {};
   ch.x = app.win_x;
   ch.y = app.win_y;
@@ -735,6 +749,19 @@ void apply_geometry(App& app) {
   XConfigureWindow(app.dpy, app.win, CWX | CWY | CWWidth | CWHeight, &ch);
 }
 
+void apply_geometry(App& app) {
+  // Avoid spurious ConfigureNotify / visual jumps when already at size.
+  // Top-left stays pinned so the origin edge never jumps.
+  if (update_size(app))
+    commit_geometry(app);
+}
+
+// Resize for a new length and pull the result fully onto the monitor.
+void apply_geometry_clamped(App& app) {
+  update_size(app);
+  clamp_position_to_monitor(app);
+  commit_geometry(app);
+}
 
 void place_on_pointer(App& app) {
   Window root_ret, child;
@@ -751,15 +778,13 @@ void place_on_pointer(App& app) {
     app.current_monitor = m;
     app.current_monitor_name = m->name;
   }
-  apply_geometry(app);
+  update_size(app);
   // Centre on the pointer along the long axis so vertical mode is not
   // biased toward the bottom of the screen; then clamp fully on-monitor.
-  int nx = root_x - app.win_w / 2;
-  int ny = root_y - app.win_h / 2;
-  app.win_x = nx;
-  app.win_y = ny;
+  app.win_x = root_x - app.win_w / 2;
+  app.win_y = root_y - app.win_h / 2;
   clamp_position_to_monitor(app);
-  XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
+  commit_geometry(app);
 }
 
 void create_window(App& app) {
@@ -837,6 +862,8 @@ void create_window(App& app) {
                   reinterpret_cast<unsigned char*>(&utility), 1);
 
   app.gc = XCreateGC(app.dpy, app.win, 0, nullptr);
+  app.font = XLoadQueryFont(app.dpy, "fixed");
+  if (!app.font) app.font = XLoadQueryFont(app.dpy, "6x13");
   if (app.has_argb)
     app.pict_format = XRenderFindVisualFormat(app.dpy, app.visual);
 
@@ -877,7 +904,6 @@ bool refresh_monitor(App& app, bool force) {
   // after letting go of the free-end handle.
   if (changed)
     apply_geometry(app);
-  (void)force;
   return changed;
 }
 
@@ -997,34 +1023,93 @@ std::string format_length(const App& app) {
   return buf;
 }
 
-// Geometry of the free-end length chip (window-local). Returns false if no font.
-bool length_chip_rect(App& app, XFontStruct* font, int* out_x, int* out_y, int* out_w, int* out_h) {
+// Geometry of the free-end length chip (window-local). In vertical mode the
+// text is drawn rotated (reading bottom-to-top) when it does not fit across
+// the ruler thickness. Returns false if no font.
+struct ChipRect {
+  int x = 0, y = 0, w = 0, h = 0;
+  bool rotated = false;
+};
+
+bool length_chip_rect(const App& app, ChipRect* out) {
+  XFontStruct* font = app.font;
   if (!font) return false;
   std::string len_s = format_length(app);
-  int ltw = XTextWidth(font, len_s.c_str(), static_cast<int>(len_s.size()));
+  const int ltw = XTextWidth(font, len_s.c_str(), static_cast<int>(len_s.size()));
+  const int fh = font->ascent + font->descent;
   const int pad = 3;
   const bool vert = app.opts.vertical;
   const int long_side = vert ? app.win_h : app.win_w;
   const int thick = vert ? app.win_w : app.win_h;
-  const int band_h = std::max(14, font->ascent + font->descent + 4);
+  const int band_h = std::max(14, fh + 4);
   const int band_y0 = (thick - band_h) / 2;
-  int lx, ly;
+  ChipRect c;
   if (vert) {
-    lx = band_y0 + 2;
-    ly = long_side - kHandlePx - kRotateBtn - 18;
+    c.rotated = ltw + 2 * pad > thick - 4;
+    c.w = (c.rotated ? fh : ltw) + 2 * pad;
+    c.h = (c.rotated ? ltw : fh) + 2 * pad;
+    // Centred across the thickness, just above the R button.
+    c.x = std::max(1, (thick - c.w) / 2);
+    c.y = long_side - kHandlePx - kRotateBtn - 6 - c.h;
   } else {
-    lx = long_side - kHandlePx - kRotateBtn - ltw - 10;
-    ly = band_y0 + font->ascent + 1;
+    c.w = ltw + 2 * pad;
+    c.h = fh + 2 * pad;
+    c.x = long_side - kHandlePx - kRotateBtn - ltw - 10 - pad;
+    c.y = band_y0 + 1 - pad;
   }
-  if (lx < 2) lx = 2;
-  if (ly < font->ascent + 2) ly = font->ascent + 2;
-  *out_x = lx - pad;
-  *out_y = ly - font->ascent - pad;
-  *out_w = ltw + 2 * pad;
-  *out_h = font->ascent + font->descent + 2 * pad;
+  c.x = std::max(c.x, 1);
+  c.y = std::max(c.y, 1);
+  *out = c;
   return true;
 }
 
+// Draw text rotated 90° counter-clockwise (reading bottom-to-top). The
+// rotated box (w = font height, h = text width) has its top-left at (x, y).
+// Core fonts cannot rotate, so render to a bitmap, transpose it and use it
+// as a clip mask for a solid fill.
+void draw_text_ccw(App& app, int x, int y, const char* s, int len, unsigned long pixel) {
+  XFontStruct* font = app.font;
+  if (!font || len <= 0) return;
+  const int tw = XTextWidth(font, s, len);
+  const int th = font->ascent + font->descent;
+  if (tw <= 0 || th <= 0) return;
+
+  Pixmap src = XCreatePixmap(app.dpy, app.win, tw, th, 1);
+  Pixmap dst = XCreatePixmap(app.dpy, app.win, th, tw, 1);
+  GC g1 = XCreateGC(app.dpy, src, 0, nullptr);
+  XSetForeground(app.dpy, g1, 0);
+  XFillRectangle(app.dpy, src, g1, 0, 0, tw, th);
+  XSetForeground(app.dpy, g1, 1);
+  XSetBackground(app.dpy, g1, 0);  // XYBitmap put maps 0 bits to background
+  XSetFont(app.dpy, g1, font->fid);
+  XDrawString(app.dpy, src, g1, 0, font->ascent, s, len);
+
+  XImage* in = XGetImage(app.dpy, src, 0, 0, tw, th, 1, XYPixmap);
+  const int bpl = (th + 7) / 8;
+  char* data = static_cast<char*>(std::calloc(static_cast<size_t>(bpl) * tw, 1));
+  XImage* out = data ? XCreateImage(app.dpy, app.visual, 1, XYBitmap, 0, data,
+                                    th, tw, 8, bpl)
+                     : nullptr;
+  if (in && out) {
+    for (int sy = 0; sy < th; ++sy)
+      for (int sx = 0; sx < tw; ++sx)
+        XPutPixel(out, sy, tw - 1 - sx, XGetPixel(in, sx, sy));
+    XPutImage(app.dpy, dst, g1, out, 0, 0, 0, 0, th, tw);
+    XSetClipMask(app.dpy, app.gc, dst);
+    XSetClipOrigin(app.dpy, app.gc, x, y);
+    XSetForeground(app.dpy, app.gc, pixel);
+    XFillRectangle(app.dpy, app.win, app.gc, x, y, th, tw);
+    XSetClipMask(app.dpy, app.gc, None);
+  }
+  if (out) XDestroyImage(out);  // frees data
+  else std::free(data);
+  if (in) XDestroyImage(in);
+  XFreeGC(app.dpy, g1);
+  XFreePixmap(app.dpy, src);
+  XFreePixmap(app.dpy, dst);
+}
+
+void draw_cal_popup(App& app);
 
 void draw_ruler(App& app) {
   if (!app.current_monitor) return;
@@ -1074,8 +1159,7 @@ void draw_ruler(App& app) {
     });
   }
 
-  XFontStruct* font = XLoadQueryFont(app.dpy, "fixed");
-  if (!font) font = XLoadQueryFont(app.dpy, "6x13");
+  XFontStruct* font = app.font;
   if (font) XSetFont(app.dpy, app.gc, font->fid);
 
   // Dual-side marks + centre label band with opaque backing for contrast.
@@ -1290,81 +1374,33 @@ void draw_ruler(App& app) {
   // Unit is included in the free-end length chip (e.g. "30.0 cm"); no extra tag at origin.
 
   // Total length readout at the FREE END only (never at the origin).
-  if (font) {
+  ChipRect chip;
+  if (length_chip_rect(app, &chip)) {
     std::string len_s = format_length(app);
     const char* lbuf = len_s.c_str();
     int llen = static_cast<int>(len_s.size());
-    int ltw = XTextWidth(font, lbuf, llen);
-    int pad = 3;
-    int lx, ly;
-    if (vert) {
-      // above the R button / handle cluster
-      lx = band_y0 + 2;
-      ly = long_side - kHandlePx - kRotateBtn - 18;
-    } else {
-      // left of R button, still on free end
-      lx = long_side - kHandlePx - kRotateBtn - ltw - 10;
-      ly = band_y0 + font->ascent + 1;
-    }
-    if (lx < 2) lx = 2;
-    if (ly < font->ascent + 2) ly = font->ascent + 2;
+    const int pad = 3;
     if (app.has_argb && app.pict_format) {
       Palette pal = current_palette(app);
-      XRenderColor chip = {};
-      chip.red = static_cast<unsigned short>(pal.chip_r * 0x101);
-      chip.green = static_cast<unsigned short>(pal.chip_g * 0x101);
-      chip.blue = static_cast<unsigned short>(pal.chip_b * 0x101);
-      chip.alpha = 0xffff;
+      XRenderColor cc = {};
+      cc.red = static_cast<unsigned short>(pal.chip_r * 0x101);
+      cc.green = static_cast<unsigned short>(pal.chip_g * 0x101);
+      cc.blue = static_cast<unsigned short>(pal.chip_b * 0x101);
+      cc.alpha = 0xffff;
       Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
-      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &chip,
-                           lx - pad, ly - font->ascent - pad,
-                           ltw + 2 * pad, font->ascent + font->descent + 2 * pad);
+      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &cc, chip.x, chip.y, chip.w, chip.h);
       XRenderFreePicture(app.dpy, pict);
-      XSetForeground(app.dpy, app.gc, color_chip_text(app));
     } else {
       XSetForeground(app.dpy, app.gc, color_chip_bg(app));
-      XFillRectangle(app.dpy, app.win, app.gc,
-                     lx - pad, ly - font->ascent - pad,
-                     ltw + 2 * pad, font->ascent + font->descent + 2 * pad);
-      XSetForeground(app.dpy, app.gc, color_chip_text(app));
+      XFillRectangle(app.dpy, app.win, app.gc, chip.x, chip.y, chip.w, chip.h);
     }
-    XDrawString(app.dpy, app.win, app.gc, lx, ly, lbuf, llen);
-  }
-
-  // Calibration mode banner — high-contrast so it cannot be missed.
-  if (app.calibrating && font) {
-    const char* line1 = "CALIBRATION";
-    char line2buf[64];
-    const int ti = std::clamp(app.cal_target_index, 0, kCalTargetCount - 1);
-    std::snprintf(line2buf, sizeof(line2buf), "Resize to real %s", kCalTargets[ti].label);
-    const char* line2 = line2buf;
-    const char* line3 = "Enter=save  Esc=cancel  Ctrl-C=next";
-    int pad = 4;
-    int lh = font->ascent + font->descent + 2;
-    int box_h = 3 * lh + 2 * pad;
-    int w1 = XTextWidth(font, line1, static_cast<int>(std::strlen(line1)));
-    int w2 = XTextWidth(font, line2, static_cast<int>(std::strlen(line2)));
-    int w3 = XTextWidth(font, line3, static_cast<int>(std::strlen(line3)));
-    int box_w = std::max(std::max(w1, w2), w3) + 2 * pad;
-    int bx = std::max(2, (app.win_w - box_w) / 2);
-    int by = std::max(2, (app.win_h - box_h) / 2);
-    if (app.has_argb && app.pict_format) {
-      XRenderColor bg = {};
-      bg.red = 0xc000; bg.green = 0x2000; bg.blue = 0x1000; bg.alpha = 0xffff;
-      Picture pict = XRenderCreatePicture(app.dpy, app.win, app.pict_format, 0, nullptr);
-      XRenderFillRectangle(app.dpy, PictOpSrc, pict, &bg, bx, by, box_w, box_h);
-      XRenderFreePicture(app.dpy, pict);
+    if (chip.rotated) {
+      draw_text_ccw(app, chip.x + pad, chip.y + pad, lbuf, llen, color_chip_text(app));
     } else {
-      XSetForeground(app.dpy, app.gc, opaque_pixel(app, 192, 32, 16));
-      XFillRectangle(app.dpy, app.win, app.gc, bx, by, box_w, box_h);
+      XSetForeground(app.dpy, app.gc, color_chip_text(app));
+      XDrawString(app.dpy, app.win, app.gc, chip.x + pad, chip.y + pad + font->ascent,
+                  lbuf, llen);
     }
-    XSetForeground(app.dpy, app.gc, color_white(app));
-    XDrawString(app.dpy, app.win, app.gc, bx + pad, by + pad + font->ascent, line1,
-                static_cast<int>(std::strlen(line1)));
-    XDrawString(app.dpy, app.win, app.gc, bx + pad, by + pad + lh + font->ascent, line2,
-                static_cast<int>(std::strlen(line2)));
-    XDrawString(app.dpy, app.win, app.gc, bx + pad, by + pad + 2 * lh + font->ascent, line3,
-                static_cast<int>(std::strlen(line3)));
   }
 
   // Border
@@ -1373,7 +1409,7 @@ void draw_ruler(App& app) {
   opaque_line(app, 0, 0, 0, app.win_h - 1);
   opaque_line(app, app.win_w - 1, 0, app.win_w - 1, app.win_h - 1);
 
-  if (font) XFreeFont(app.dpy, font);
+  if (app.calibrating) draw_cal_popup(app);
   XFlush(app.dpy);
 }
 
@@ -1406,12 +1442,91 @@ void toggle_orient(App& app) {
   int cx = app.win_x + app.win_w / 2;
   int cy = app.win_y + app.win_h / 2;
   app.opts.vertical = !app.opts.vertical;
-  apply_geometry(app);
+  update_size(app);
   app.win_x = cx - app.win_w / 2;
   app.win_y = cy - app.win_h / 2;
   clamp_position_to_monitor(app);
-  XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
+  commit_geometry(app);
   draw_ruler(app);
+}
+
+// Calibration instructions live in their own small window next to the
+// ruler: a vertical ruler (or a short horizontal one) is far too narrow to
+// hold the text.
+void cal_popup_lines(const App& app, std::string lines[4]) {
+  const int ti = std::clamp(app.cal_target_index, 0, kCalTargetCount - 1);
+  lines[0] = "CALIBRATION";
+  lines[1] = std::string("Resize to real ") + kCalTargets[ti].label;
+  lines[2] = std::string(app.opts.vertical ? "Vertical" : "Horizontal") + " axis of " +
+             (app.current_monitor ? app.current_monitor->name : std::string("?"));
+  lines[3] = "Enter=save  Esc=cancel  Ctrl-C=next";
+}
+
+void draw_cal_popup(App& app) {
+  if (!app.cal_win || !app.font) return;
+  XFontStruct* font = app.font;
+  std::string lines[4];
+  cal_popup_lines(app, lines);
+  const int pad = 6;
+  const int lh = font->ascent + font->descent + 2;
+  int w = 0;
+  for (const auto& l : lines)
+    w = std::max(w, XTextWidth(font, l.c_str(), static_cast<int>(l.size())));
+  w += 2 * pad;
+  const int h = 4 * lh + 2 * pad;
+
+  // Beside the ruler: below/above a horizontal one, right/left of a
+  // vertical one, whichever side has room on the monitor.
+  constexpr int gap = 6;
+  int x, y;
+  if (app.opts.vertical) {
+    x = app.win_x + app.win_w + gap;
+    y = app.win_y;
+  } else {
+    x = app.win_x;
+    y = app.win_y + app.win_h + gap;
+  }
+  if (app.current_monitor) {
+    const MonitorInfo& m = *app.current_monitor;
+    if (app.opts.vertical && x + w > m.x + m.width_px)
+      x = app.win_x - gap - w;
+    if (!app.opts.vertical && y + h > m.y + m.height_px)
+      y = app.win_y - gap - h;
+    x = std::clamp(x, m.x, std::max(m.x, m.x + m.width_px - w));
+    y = std::clamp(y, m.y, std::max(m.y, m.y + m.height_px - h));
+  }
+  XMoveResizeWindow(app.dpy, app.cal_win, x, y, w, h);
+  XRaiseWindow(app.dpy, app.cal_win);
+
+  XSetForeground(app.dpy, app.gc, opaque_pixel(app, 192, 32, 16));
+  XFillRectangle(app.dpy, app.cal_win, app.gc, 0, 0, w, h);
+  XSetForeground(app.dpy, app.gc, color_white(app));
+  XSetFont(app.dpy, app.gc, font->fid);
+  for (int i = 0; i < 4; ++i)
+    XDrawString(app.dpy, app.cal_win, app.gc, pad, pad + i * lh + font->ascent,
+                lines[i].c_str(), static_cast<int>(lines[i].size()));
+}
+
+void open_cal_popup(App& app) {
+  if (app.cal_win) return;
+  XSetWindowAttributes swa = {};
+  swa.colormap = app.colormap;
+  swa.border_pixel = 0;
+  swa.background_pixel = opaque_pixel(app, 192, 32, 16);
+  swa.override_redirect = True;
+  swa.event_mask = ExposureMask;
+  app.cal_win = XCreateWindow(app.dpy, app.root, 0, 0, 1, 1, 0, app.depth,
+                              InputOutput, app.visual,
+                              CWColormap | CWBorderPixel | CWBackPixel |
+                                  CWOverrideRedirect | CWEventMask,
+                              &swa);
+  XMapRaised(app.dpy, app.cal_win);
+}
+
+void close_cal_popup(App& app) {
+  if (!app.cal_win) return;
+  XDestroyWindow(app.dpy, app.cal_win);
+  app.cal_win = 0;
 }
 
 void begin_calibration(App& app) {
@@ -1422,9 +1537,11 @@ void begin_calibration(App& app) {
   app.cal_saved_length_mm = app.opts.length_mm;
   app.cal_saved_factor = app.current_monitor->cal_along(app.opts.vertical);
   app.cal_monitor_name = app.current_monitor->name;
-  // Start near the target length so the user only fine-tunes.
+  // Start near the target length so the user only fine-tunes; keep it on
+  // the monitor so no part of the reference span is blanked.
   app.opts.length_mm = kCalTargets[app.cal_target_index].mm;
-  apply_geometry(app);
+  open_cal_popup(app);
+  apply_geometry_clamped(app);
   draw_ruler(app);
 }
 
@@ -1432,13 +1549,14 @@ void cycle_cal_target(App& app) {
   if (!app.calibrating) return;
   app.cal_target_index = (app.cal_target_index + 1) % kCalTargetCount;
   app.opts.length_mm = kCalTargets[app.cal_target_index].mm;
-  apply_geometry(app);
+  apply_geometry_clamped(app);
   draw_ruler(app);
 }
 
 void cancel_calibration(App& app) {
   if (!app.calibrating) return;
   app.calibrating = false;
+  close_cal_popup(app);
   app.opts.length_mm = app.cal_saved_length_mm;
   // Restore factor on the live monitor entry if still the same output.
   if (app.current_monitor && app.current_monitor->name == app.cal_monitor_name) {
@@ -1485,15 +1603,19 @@ void confirm_calibration(App& app) {
   if (factor < 0.05) factor = 0.05;
   if (factor > 20.0) factor = 20.0;
 
+  // The span was measured on the current monitor (the ruler may have been
+  // moved to another output since Shift-C), so store the factor there.
+  const std::string mon_name = m.name;
   for (auto& mon : app.monitors) {
-    if (mon.name == app.cal_monitor_name) {
+    if (mon.name == mon_name) {
       mon.cal_along(vert) = factor;
-      app.cal_factors[app.cal_monitor_name] = mon.cal;
+      app.cal_factors[mon_name] = mon.cal;
       app.current_monitor = &mon;
       break;
     }
   }
   app.calibrating = false;
+  close_cal_popup(app);
   // Keep the window size; length now correctly reports the target.
   app.opts.length_mm = target_mm;
   apply_geometry(app);
@@ -1538,18 +1660,10 @@ App::DragMode hit_test(App& app, int x, int y) {
     return App::DragMode::RotateHint;
 
   // Length chip toggles units on click
-  XFontStruct* font = XLoadQueryFont(app.dpy, "fixed");
-  if (!font) font = XLoadQueryFont(app.dpy, "6x13");
-  if (font) {
-    int cx, cy, cw, ch;
-    if (length_chip_rect(app, font, &cx, &cy, &cw, &ch)) {
-      if (x >= cx && x < cx + cw && y >= cy && y < cy + ch) {
-        XFreeFont(app.dpy, font);
-        return App::DragMode::UnitChip;
-      }
-    }
-    XFreeFont(app.dpy, font);
-  }
+  ChipRect c;
+  if (length_chip_rect(app, &c) &&
+      x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h)
+    return App::DragMode::UnitChip;
 
   return App::DragMode::Move;
 }
@@ -1557,24 +1671,19 @@ App::DragMode hit_test(App& app, int x, int y) {
 void handle_event(App& app, XEvent& ev) {
   switch (ev.type) {
     case Expose:
-      if (ev.xexpose.count == 0) draw_ruler(app);
+      if (ev.xexpose.count != 0) break;
+      if (app.cal_win && ev.xexpose.window == app.cal_win)
+        draw_cal_popup(app);
+      else
+        draw_ruler(app);
       break;
 
     case ConfigureNotify:
-      // During free-end resize the origin is locked; ignore WM position/size
-      // feedback so the left/top edge cannot jump.
-      if (app.drag == App::DragMode::ResizeRight)
-        break;
-      app.win_x = ev.xconfigure.x;
-      app.win_y = ev.xconfigure.y;
-      if (ev.xconfigure.width != app.win_w || ev.xconfigure.height != app.win_h) {
-        XWindowChanges ch = {};
-        ch.x = app.win_x;
-        ch.y = app.win_y;
-        ch.width = app.win_w;
-        ch.height = app.win_h;
-        XConfigureWindow(app.dpy, app.win, CWX | CWY | CWWidth | CWHeight, &ch);
-      }
+      // The window is override-redirect, so the server only ever applies our
+      // own requests and app.win_* is authoritative. Do not copy the reported
+      // geometry back: during a resize+move sequence the events lag behind
+      // and a stale position made off-monitor blanking draw against the
+      // wrong place (e.g. a half-blank ruler right after rotating).
       break;
 
     case ButtonPress: {
@@ -1630,9 +1739,11 @@ void handle_event(App& app, XEvent& ev) {
       if (ev.xbutton.button == Button1 || ev.xbutton.button == Button2) {
         const bool was_resize = (app.drag == App::DragMode::ResizeRight);
         app.drag = App::DragMode::Idle;
-        // Re-query monitor only after a move; never force a size change after resize.
+        // Re-query monitor only after a move; never force a size change after
+        // resize. Skip the motion hysteresis so a short move across an
+        // output border still picks up the right scale.
         if (!was_resize)
-          refresh_monitor(app, false);
+          refresh_monitor(app, true);
         draw_ruler(app);
       }
       break;
@@ -1724,6 +1835,13 @@ void handle_event(App& app, XEvent& ev) {
       break;
 
     default:
+      if (app.rr_event_base >= 0 && ev.type == app.rr_event_base + RRScreenChangeNotify) {
+        // Monitor layout / mode / rotation changed: re-derive the scale.
+        XRRUpdateConfiguration(&ev);
+        refresh_monitor(app, true);
+        apply_geometry(app);
+        draw_ruler(app);
+      }
       break;
   }
 }
@@ -1753,10 +1871,15 @@ int main(int argc, char** argv) {
   if (!app.dpy) die("cannot open X display");
 
   int event_base, error_base;
-  if (!XRRQueryExtension(app.dpy, &event_base, &error_base))
+  const bool have_rr = XRRQueryExtension(app.dpy, &event_base, &error_base);
+  if (!have_rr)
     std::fprintf(stderr, "rulertoo: XRandR not available, using fallback sizes\n");
 
   create_window(app);
+  if (have_rr) {
+    app.rr_event_base = event_base;
+    XRRSelectInput(app.dpy, app.root, RRScreenChangeNotifyMask);
+  }
   if (have_saved_pos) {
     // Restore monitor for the saved position, then size + move.
     app.monitors = query_monitors(app.dpy, app.root, app.cal_factors);
@@ -1766,9 +1889,7 @@ int main(int argc, char** argv) {
       app.current_monitor = m;
       app.current_monitor_name = m->name;
     }
-    apply_geometry(app);
-    clamp_position_to_monitor(app);
-    XMoveWindow(app.dpy, app.win, app.win_x, app.win_y);
+    apply_geometry_clamped(app);
   } else {
     place_on_pointer(app);
   }

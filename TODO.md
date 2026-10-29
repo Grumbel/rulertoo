@@ -13,6 +13,9 @@
 - [x] Smooth free-end resize (continuous length_mm, 1 px steps)
 - [x] Per-monitor calibration (Shift-C; Ctrl-C cycles 5–30 cm / 2–12 in)
 - [x] Separate horizontal / vertical calibration (cal.OUTPUT=W,H)
+- [x] Calibration instructions in a popup beside the ruler (fits vertical)
+- [x] Vertical length chip rotated when too wide; no stale geometry after rotate
+- [x] Track XRandR layout changes; create missing config parent dirs
 - [x] flake: xorgproto, libxau (drop deprecated xorg.* names)
 - [x] gamepkgstd (Linux desktop): VERSION, --version, WM_CLASS, develop helpers
 - [x] Colour schemes on `c` (default / opaque / inverted / high-contrast / amber)
